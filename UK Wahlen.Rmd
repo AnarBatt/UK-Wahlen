@@ -1,0 +1,2869 @@
+
+---
+title: "UK Wahlen"
+author: 
+- Anar Battaivan
+urlcolor: blue
+output: 
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+    citation_package: natbib
+bibliography: Bibliography.bib
+biblio-style: apalike
+--- 
+
+
+```{r setup, include=FALSE}
+#warning/message global unterdrücken, damit ggplot2-Deprecation-Hinweise
+#(z. B. size->linewidth) und "Removed N rows ..."-Meldungen nicht im PDF
+#erscheinen.
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+.packages <- c("MASS")
+.inst     <- .packages %in% installed.packages()
+if(length(.packages[!.inst]) > 0) install.packages(.packages[!.inst])
+.loading  <- lapply(.packages, require, character.only=TRUE)
+if(any(!unlist(.loading))) stop("looks like some library did not load")
+```
+
+```{r, echo=FALSE, results='hide'}
+if (!('rmdwc' %in% installed.packages())) install.packages('rmdwc')
+#results='hide': Wortzählung wird berechnet, aber die Tabelle
+#(## file lines words ...) nicht ins PDF gedruckt.
+rmdwc::rmdcount()
+```
+
+```{r library and shapefiles, include=FALSE, echo=FALSE}
+#Libary
+library(maps) #Display of maps
+library(mapdata) #Supplement to maps package, providing the larger and/or 
+                 #higher-resolution databases
+library(sf) #supports reading from many spatial data formats 
+            #(replaces the retired rgdal/maptools/rgeos packages)
+library(ggmap) #extends the plotting package ggplot2 for maps
+library(tidyverse) #call the tidyverse for dplyr, ggplot and stringrs
+library(readxl)
+library(gridExtra)
+
+#broom::tidy() für sp-Objekte wurde entfernt (defunct ab broom 1.0.4).
+#Diese Hilfsfunktion erzeugt aus einem sf-Objekt denselben
+#"fortified" data.frame (Spalten long/lat/order/hole/piece/group/id),
+#den broom::tidy(sp, region=) früher geliefert hat. Dadurch bleibt die
+#restliche Karten-Logik (geom_polygon, $id, join(by="id")) unverändert.
+sf_to_fortified <- function(x, region) {
+  x <- sf::st_cast(x, "MULTIPOLYGON", warn = FALSE)
+  ids <- as.character(x[[region]])
+  coords <- sf::st_coordinates(sf::st_geometry(x))
+  df <- data.frame(
+    long  = coords[, "X"],
+    lat   = coords[, "Y"],
+    order = seq_len(nrow(coords)),
+    hole  = FALSE,
+    #L1 = Ring, L2 = Polygon innerhalb des Features, L3 = Feature-Index
+    piece = coords[, "L2"],
+    id    = ids[coords[, "L3"]],
+    stringsAsFactors = FALSE
+  )
+  #group = eindeutige Polygon-Kennung je (id, piece), analog zu broom::tidy
+  df$group <- paste(df$id, df$piece, sep = ".")
+  df[, c("long", "lat", "order", "hole", "piece", "id", "group")]
+}
+
+## change paths before running on different pc
+
+#rgdal::readOGR wurde durch sf::st_read ersetzt (rgdal ist von CRAN
+#entfernt). Die sf-Objekte werden in den Karten-Chunks mit
+#sf_to_fortified() in die klassische long/lat/group/id-Form gebracht.
+shapefile_Kommunen <- st_read(dsn="data/Local_Authority_Districts__December_2015__Boundaries-shp",layer="Local_Authority_Districts__December_2015__Boundaries")
+shapefile_Wahlkreis <- st_read(dsn="data/UK_Westminster_Parliamentary_Consituencies__December_2016__Boundaries-shp",layer="UK_Westminster_Parliamentary_Consituencies__December_2016__Boundaries")
+#change paths for reading in shapefiles
+shapefile <- st_read(dsn="data/Westminster_Parliamentary_Constituencies_(December_2019)_Boundaries_UK_BUC-shp",
+                     layer="Westminster_Parliamentary_Constituencies_(December_2019)_Boundaries_UK_BUC")
+shapefile.2 <- st_read(dsn="data/Local_Authority_Districts__April_2019__UK_BUC_v2-shp",
+                       layer="Local_Authority_Districts__April_2019__UK_BUC_v2")
+```
+
+# Wahlen in Großbritannien
+
+## Inhaltsverzeichnis
+I Abbildungsverzeichnis
+II Tabellenverzeichnis
+1. Einführung
+2. Literatur-Review
+2.1 Das politische System Großbritanniens
+2.2 Das EU-Referendum
+3. Vorstellung der verwendeten Daten
+4. Analyse
+4.1 EU-Referendum
+4.2 Parlamentswahlen 2015, 2017 und 2019
+4.3 Zusammenhang des Referendums mit nachfolgenden Parlamentswahlen
+5. Zusammenfassung
+6. Literaturverzeichnis
+
+
+## 1. Einführung
+Am 23.06.2016 hat das Vereinigte Königkeit ein Referendum über den Verbleib in der Europäischen Union abgehalten. Im Zeitraum von nur vier Jahren fanden in den Jahren 2015, 2017 und 2019 drei Parlamentswahlen statt. Die Hintergründe und Ausgänge der Parlamentswahlen waren eng mit dem EU-Referendum verknüpft. Von 46,5 Millionen wahlberechtigten Bürgern im Vereinigten Königreich haben sich 72,2%  an der Wahl beteiligt. Für einen Austritt aus der EU haben 51,9% der Wähler, bzw. 17,4 Millionen oder 37,4% der wahlberechtigten Bürger gestimmt. Für einen Verbleib waren 48,1% der Wähler, bzw. 16,1 Millionen Bürger oder 34,7% der wahlberechtigten Bürger.
+
+Das Vereinigte Königreich besteht aus verschiedenen regionalen Gebieten: London, North East, North West, Yorkshire, East Midlands, West Midlands, South East, East of England und South West. Gibraltar ist ein Überseeterritorium von Großbritannien und wird dem South West England zugeordnet. Im Gegensatz zu den restlichen Überseegebieten Großbritanniens war Gibraltar zum Zeitpunkt des Referendums im Jahr 2016 als Teil des Vereinigten Königreichs ein Mitglied der Europäischen Union. Politisch besteht das Vereinigte Königkeit aus 650 Wahlkreisen.
+Die Entscheidung des britischen Volkes, der Europäischen Union nach 43 Jahren Mitgliedschaft den Rücken zu kehren, war ein Schock für weite Teile Großbritanniens, Europas und der Welt.
+
+## 2. Literatur-Review
+Ziel des folgenden Kapitels ist es, die vorhandene Literatur zum Thema Brexit darzustellen. Es ist zu beachten, dass es nahezu unmöglich wäre, die gesamte Literatur zum Thema Brexit aufzulisten. Daher wird in diesem Kapitel ein kurzer Überblick über das Thema gegeben, der als Grundgerüst für die Analyse dienen soll.
+
+### 2.1 Das politische System Großbritanniens
+
+Das Vereinigte Königreich von Großbritannien und Nordirland ist ein zentralistischer Einheitsstaat. Das Vereinigte Königreich gilt als eine parlamentarische Erbmonarchie mit einer dem Parlament verantwortlichen Kabinettsregierung. Zudem gilt zwischen dem Regierungschef und der Krone zu unterschieden. Der Regierungschef hat eine starke Position im Kabinett und in der Partei, während die Krone formale Befugnisse hat. In vielen Bereichen wird der Staat zentralistisch verwaltet und regiert. Einzelne Zuständigkeiten sind jedoch seit 1990 durch „Devolution“ (Dezentralisierung) an die Teilstaaten Schottland, Wales und Nordirland übertragen worden (Auswärtiges Amt, 2021). England hat als grösste Teilnation keine eigene Exekutive und Legislative. Das Parlament ist in zwei Kammern unterteilt: das gewählte Unterhaus (House of Commons) und das Oberhaus (House of Lords), dessen Mitglieder auf Lebenszeit ernannt und nicht gewählt werden (Bundeszentrale für politische Bildung, 2012). Das 650-köpfige britische Unterhaus wird hingegen demokratisch gewählt. Von den 650 Wahlkreisen in Großbritannien liegen 533 in England, 40 in Wales, 18 in Nordirland und 59 in Schottland (Luxemburger Wort, 2019). Bestimmte Gesetzesvorhaben unterliegen einem aufschiebenden Veto des Oberhauses. Bei der Wahl im Jahr 2009 wurde der Oberste Gerichtshof (Supreme Court) eingerichtet (Auswärtiges Amt, 2021).
+ 
+Das politische System wird vom Prinzip des Majorz dominiert. Die beiden größten Parteien sind die Konservativen (Conservatives) und die Labour-Partei (Labour), daneben gibt es eine Reihe weiterer kleiner Parteien, von denen die wichtigste die Partei der Liberalen (Liberal Democrats) ist. Da in Großbritannien das Prinzip des Majorz gilt, gewinnt in der Regel eine der beiden Hauptparteien die absolute Mehrheit von 326 Stimmen der Parlamentssitze (Bundeszentrale für politische Bildung, 2012).
+ 
+### 2.2 Das EU-Referendum
+
+Der Brexit bezeichnet den Austritt des Vereinigten Königsreichs aus der Europäischen Union (EU), der mit einem Referendum am 23. Juni 2016 im Vereinigten Königreich beschlossen wurde (UK Government, 2016). Laut einem Policy Brief der Bertelsmann Stiftung (Bertelsmann Stiftung, 2015, S. 2) ist der Begrifflichkeit Brexit wie folgt zu verstehen; 
+„Die in den Medien häufig verwendete Abkürzung »Brexit« (ein Kunstwort aus „Britain“ und „Exit“) ist insofern irreführend, als nicht „Britain“ oder Grossbritannien, sondern das Vereinigte Königreich (zu dem neben England, Schottland und Wales auch Nordirland gehört) aus der EU austreten würde. Der geografische Begriff der Britischen Inseln umfasst auch die irische Insel und mithin Irland, dessen Austritt aus der EU nicht zur Debatte steht.“
+Dabei stimmten 51,89 % der Wähler in Grossbritannien für den endgültigen Austritt aus der EU (The Electoral Comission, 2021). Die britische Regierung hatte bis März 2017 Zeit, den Europäischen Rat offiziell über die Ausstiegsentscheidung zu informieren. Gemäss Artikel 50 des Vertrags von Lissabon werden die EU und das Vereinigte Königreich nach dieser offiziellen Mitteilung neue Regeln für die künftigen politischen und wirtschaftlichen Beziehungen aushandeln. Wenn die beiden Parteien nach einer Verhandlungsfrist von zwei Jahren keine Einigung erzielen können, gelten die EU-Verträge in jedem Fall nicht mehr für das Vereinigte Königreich.
+Die EU-Mitgliedschaft Großbritanniens, dem Ursprungsland des Euroskeptizismus, ist seit dem Beitritt 1973 umstritten. Denn über den EG-Verbleib wurde bereits im Jahr 1975 in einem Referendum mit 67,2 % abgestimmt. Der wiedergewählte konservative Premierminister David Cameron setzte im Jahr 2016 ein ähnliches Wahlversprechen um, wonach die Bedingungen für die Mitgliedschaft Grossbritanniens neu verhandelt und in einem In-Out-Referendum darüber abgestimmt werden sollten (Klein, 2020, S. 101). Dies ist auf den Druck der antieuropäischen Kräfte zurückzuführen, insbesondere der United Kingdom Independence Party (UKIP), aber auch auf den Druck aus den eigenen Reihen von David Cameron in der Conversative Party und der Mehrheit der Medien im Lande. Das Reformpaket, das nach intensiven Verhandlungen eine Reihe von weiteren Sonderregelungen für die Mitgliedschaft eröffnete, wurde dann im Februar 2016 im Europäischen Rat verabschiedet (Fettahlioglu & Birin, 2016, S. 266). Im Wahlkampf standen sich zwei parteiübergreifende Kampagnen gegenüber, wobei die „Britian Stronger in Europe“ ausser der Beschwörung einer ökonomischen Krise keine positiven Motive für einen Verbleib in der EU fand. Die „Vote Leave“-Kampagne, die von der integrations- und einwanderungsfeindlichen UKIP vorangetrieben wurde, führte eine eher unsachliche und euroskeptische Kampagne, die auch Ängste vor Einwanderung und Islam schürte (Klein, 2020, S. 102).
+Am 23. Juni 2016 entschieden die Briten per Referendum über die EU-Mitgliedschaft ihres Landes. Wahlberechtigt waren alle im Vereinigten Königreich lebenden britischen Staatsbürger und Bürger der Commonwealth-Länder, die das Mindestalter von 18 Jahren erreicht hatten. Dazu durften Briten wählen, die im Ausland leben, sofern sie sich in den letzten 15 Jahren einmal auf einer Wahlliste eingetragen haben. Die Bürger der britischen Enklave Gibraltar waren ebenfalls wahlberechtigt (Government UK, o.D.). Bei der Brexit-Abstimmung lag die Wahlbeteiligung bei 72,2 Prozent.
+Der knappe Ausgang des Referendums mit 51,89 % offenbarte, dass das Vereinigte Königreich in der Frage der EU-Mitgliedschaft tief gespalten ist (The Electoral Commission, 2019).
+
+
+## 3. Vorstellung der verwendeten Daten
+
+In diesem Kapitel werden die verwendeten Daten zum EU-Referendum und den Parlamentswahlen 2015, 2017 und 2019 vorgestellt. Neben den offiziellen Wahlergebnissen werden auch Schätzungen verwendet. Die Gründe dieser Entscheidung sollen hier kurz erläutert werden.
+
+
+```{r import EU referendum dataset, echo = FALSE}
+library(knitr)
+brexit <- read.csv("data/EU-referendum-result-data.csv")
+#mutate() statt summarise(): hier werden pro Zeile neue Spalten
+#berechnet (alle 382 Zeilen bleiben erhalten), es wird nicht aggregiert.
+#Seit dplyr 1.1.0 verlangt summarise() Ergebnisse der Länge 1 pro Gruppe.
+brexitdata <- brexit %>% 
+  mutate(tot_Votes = Remain + Leave, decision_for_Brexit = (Remain < Leave), 
+         odds_Brexit = Leave/Remain, 
+         Percentage_Leave = Leave * 100 / tot_Votes) %>% 
+  select(Region, Area, Electorate, Remain, Leave, 
+         tot_Votes, decision_for_Brexit, odds_Brexit, Percentage_Leave)
+kable(head(brexitdata)[ , 1:5], format = "markdown", 
+      caption = "Wahlergebnisse des EU-Referendums nach Kommunen") 
+#382 local authorities
+```
+
+
+Bei den verwendeten Daten handelt es sich um die offiziellen Wahlergebnisse des EU-Referendums 2016 (bezogen von data.london.gov.uk).
+Gemäß des “European Union Referendum Act 2015” gab es während des  EU-Referendums in Großbritanien 382 “voting areas”.
+Die Tabelle ist auf fünf wesentliche Spalten reduziert. Die Region East of England ist mit 5,9 Mio. Einwohnern eines der zwölf geographischen Regionen der UK. In der “voting area” Peterborough lebten zum Zeitpunkt des Referendums 120’892 Wahlberechtigte. Mit einer Wahlbeteiligung von 72,29% 60,89% stimmten die Bürger in Peterborough für Leave und 39,11% für Remain.
+Die Wahlergebnisse erstrecken sich nicht nur auf Peterborough, sondern auf alle 382 EU-Referendums-Wahlkommunen (“voting areas”).
+
+
+```{r Wahlergebnisse 2015/-17/-19 original, echo=FALSE}
+HoC <- read.csv("data/HoC-GE2019-results-by-constituency-csv.csv") 
+#2019 als Bsp, Rest in data Ordner
+kable(head(HoC) %>% 
+        select(constituency_name, electorate, valid_votes, 
+               con, lab, green, alliance),
+      caption = "Wahlergebnisse 2019 nach Wahlkreisen \n(Wahlergebnisse 2015/-17 analog aufgebaut)")
+```
+
+Das Parlament der UK beinhaltet 650 Wahlkreise (constituencies). Jeder Wahlkreis wählt einen Parlamentsabgeordneten (member of parliament MP) nach dem Pluralitätssystem (first-past-the-post).
+In der Tabelle zur Parlamentswahl 2019 ist die absolute Häufigkeit der Stimmen dargestellt, die die größten Parteien erhalten haben. Bei den verwendeten Daten handelt es sich um die Grundgesamtheit aller wahlberechtigten UK-Bürger, die zu dem bestimmten Wahltermin ihre Stimme einer bestimmten Partei gegeben haben (offizielle Wahlergebnisse bezogen von commonslibrary.parliament.uk). 
+Analog sind die Wahldaten für die Parlamentswahlen 2015 und 2017 aufgebaut.
+
+```{r read csv Schätzungen, echo=FALSE}
+Leave_vote_constituency <- 
+  read.csv("data/Revised estimates of leave vote in Westminster constituencies - demog_based_estimates.csv")
+kable(head(Leave_vote_constituency) %>%
+        select(Constituency, Estimated.Leave.proportion, 
+               Known.result, Figure.to.use),
+      caption = "Schätzung der Wahlergebnisse des EU-Referendums nach Wahlkreis")
+```
+
+```{r Analyse leave vote estimates, include=FALSE, echo=FALSE}
+Leave_vote_constituency_result_known <- 
+  Leave_vote_constituency[!is.na(Leave_vote_constituency$Known.result), ]
+difference_estimate_result <- 
+  mapply(function(x, y) x - y,
+         Leave_vote_constituency_result_known$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known$Known.result)
+t.test(difference_estimate_result, mu = 0)
+Leave_vote_constituency_unterschaetzt <- 
+  Leave_vote_constituency_result_known[
+    which(difference_estimate_result < -1 * sd(difference_estimate_result)), ]
+Leave_vote_constituency_ueberschaetzt <- 
+  Leave_vote_constituency_result_known[
+    which(difference_estimate_result > sd(difference_estimate_result)), ]
+Leave_vote_constituency_result_known_EastMidlands <-
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "East Midlands", ]
+difference_estimate_result_EastMidlands <- 
+  mapply(function(x, y) x - y, 
+         Leave_vote_constituency_result_known_EastMidlands$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_EastMidlands$Known.result)
+t.test(difference_estimate_result_EastMidlands, mu = 0)
+Leave_vote_constituency_result_known_EastofEngland <-
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "East of England", ]
+difference_estimate_result_EastofEngland <- mapply(function(x, y) x - y, 
+    Leave_vote_constituency_result_known_EastofEngland$Estimated.Leave.proportion,
+    Leave_vote_constituency_result_known_EastofEngland$Known.result)
+t.test(difference_estimate_result_EastofEngland, mu = 0)
+Leave_vote_constituency_result_known_London <-
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "London", ]
+difference_estimate_result_London <- 
+  mapply(function(x, y) x - y,
+         Leave_vote_constituency_result_known_London$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_London$Known.result)
+t.test(difference_estimate_result_London, mu = 0)
+Leave_vote_constituency_result_known_NorthEast <-
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "North East", ]
+difference_estimate_result_NorthEast <- 
+  mapply(function(x, y) x - y, 
+         Leave_vote_constituency_result_known_NorthEast$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_NorthEast$Known.result)
+t.test(difference_estimate_result_NorthEast, mu = 0)
+Leave_vote_constituency_result_known_NorthWest <- 
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "North West", ]
+difference_estimate_result_NorthWest <- 
+  mapply(function(x, y) x - y, 
+         Leave_vote_constituency_result_known_NorthWest$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_NorthWest$Known.result)
+t.test(difference_estimate_result_NorthWest, mu = 0)
+Leave_vote_constituency_result_known_Scotland <- 
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "Scotland", ]
+difference_estimate_result_Scotland <- 
+  mapply(function(x, y) x - y, 
+         Leave_vote_constituency_result_known_Scotland$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_Scotland$Known.result)
+t.test(difference_estimate_result_Scotland, mu = 0)
+Leave_vote_constituency_result_known_SouthEast <- 
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "South East", ]
+difference_estimate_result_SouthEast <- 
+  mapply(function(x, y) x - y, 
+         Leave_vote_constituency_result_known_SouthEast$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_SouthEast$Known.result)
+t.test(difference_estimate_result_SouthEast, mu = 0)
+Leave_vote_constituency_result_known_SouthWest <- 
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "South West", ]
+difference_estimate_result_SouthWest <- 
+  mapply(function(x, y) x - y, 
+         Leave_vote_constituency_result_known_SouthWest$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_SouthWest$Known.result)
+t.test(difference_estimate_result_SouthWest, mu = 0)
+Leave_vote_constituency_result_known_Wales <- 
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "Wales", ]
+difference_estimate_result_Wales <- 
+  mapply(function(x, y) x - y, 
+         Leave_vote_constituency_result_known_Wales$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_Wales$Known.result)
+t.test(difference_estimate_result_Wales, mu = 0)
+Leave_vote_constituency_result_known_WestMidlands <- 
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "West Midlands", ]
+difference_estimate_result_WestMidlands <- 
+  mapply(function(x, y) x - y, 
+         Leave_vote_constituency_result_known_WestMidlands$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_WestMidlands$Known.result)
+t.test(difference_estimate_result_WestMidlands, mu = 0)
+Leave_vote_constituency_result_known_YorkshireandTheHumber <- 
+  Leave_vote_constituency_result_known[
+    Leave_vote_constituency_result_known$Region == "Yorkshire and The Humber", ]
+difference_estimate_result_YorkshireandTheHumber <- 
+  mapply(function(x, y) x - y,                           
+         Leave_vote_constituency_result_known_YorkshireandTheHumber$Estimated.Leave.proportion,
+         Leave_vote_constituency_result_known_YorkshireandTheHumber$Known.result)
+t.test(difference_estimate_result_YorkshireandTheHumber, mu = 0)
+```
+
+Zusätzlich zu den offiziellen Daten zum EU-Referendum benutze ich Daten einer Schätzung von 632 Wahlkreisen (bezogen von medium.com/@chrishanretty). Rein offzielle Daten sind nicht vergleichbar, da diese nach den 382 Wahlkommunen statt den 650 Wahlkreisen ausgezählt wurden.
+Es wird der geschätzte Leave-Stimmenanteil eines Wahlkreises mit dem offiziellen Wahlergebnis des Wahlkreises verglichen. Das geschätzte Resultat weicht von den tatsächlichen Ergebnissen ab. Es wurden T-Tests durchgeführt. Sowohl über den gesamt bekannten Daten als auch regional unterteilt. Die Tests geben mir keinerlei Anlass, die Schätzungen als nicht-valide anzusehen. Also habe ich die Schätzungen in der weiteren Analyse verwendet.
+ 
+
+
+  
+```{r t.test Grafik, echo=FALSE}
+Constituencies.known.result <- 
+  Leave_vote_constituency[!is.na(Leave_vote_constituency$Known.result), ]
+ggplot(data = Constituencies.known.result, 
+       aes(x = Known.result, y = Estimated.Leave.proportion)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept= 0, alpha = 0.2) + #Winkelhalbierende
+  theme(legend.text = element_text(size = 15)) +
+  labs(y = "Geschätzter Leave-Stimmenanteil", 
+       x = "Tatsächlicher Leave-Stimmenanteil", 
+       title = "Vergleich Schätzung und tatsächliches Ergebnis \nbeim EU -Referendum")
+```
+```{r Korrelationskoeffizient, echo=FALSE, include=FALSE}
+cor(Constituencies.known.result$Known.result, 
+    Constituencies.known.result$Estimated.Leave.proportion, method = "pearson")
+```
+
+Schätzungen und Auszählungen auf Wahlkreisebene
+Bravais-Pearson-Korrelationskoeffizient = 0,9863.
+
+Der Plot bildet eine Gegenüberstellung des geschätzten vs. tatsächlichen Leave-Stimmenanteils.
+Es existiert eine fast-perfekte Korrelation zwischen dem geschätzten Leave-Stimmenanteil und dem tatsächlichen Leave-Stimmenanteil.
+Die Bravais-Pearson-Korrelation von 0.9863 bestätigt uns die die Qualität der Schätzung und dass wir die Schätzung benutzen dürfen.
+
+
+```{r read xlsx age, echo=FALSE}
+#ecxel Alterstabellen einlesen, erstellt aus Tabellen der einzelnen Jahre von 
+#Statistikämtern aus Schottland, Nordirland, England & Wales 
+constituency_age_2015 <- read_excel("data/constituency_age_2015.xlsx")
+constituency_age_2016 <- read_excel("data/constituency_age_2016.xlsx")
+constituency_age_2017 <- read_excel("data/constituency_age_2017.xlsx")
+constituency_age_2019 <- read_excel("data/constituency_age_2019.xlsx")
+
+kable(head(constituency_age_2019)[, 1:10],
+      caption = "Tabelle zur Altersverteilung der  Wahlkreise 2019 \n (2015/-16/-17 analog aufgebaut)")
+```
+
+Die Tabelle ordnet die Bewohner der 650 Wahlkreise von den Parlamentswahlen 2019 nach Alter. Die Spalte “All Ages” beschreibt die Gesamtbevölkerung eines Wahlkreises.
+Spalte “0” steht für die Kategorie der Anzahl der Neugeborenen bis zu Einjährigen, “1” für Ein- bis Zweijährige, “2” für die Anzahl der Zwei-bis Dreijährigen etc. 
+
+## 4. Analyse
+
+In diesem Kapitel werden die offiziellen Ergebnisse des EU-Referendums analysiert. Zweitens werden die Wahlergebnisse der für das EU-Referendum wichtigsten Parlamentswahlen dargestellt. Das sind meiner Meinung nach die Parlamentswahl im Jahr 2015 - ein Jahr vor dem Referendum 2016 - sowie die zwei Parlamentswahlen in den Folgejahren 2017 und 2019. Mithilfe der Ergebnisse sollen drittens Zusammenhänge des EU-Referendums mit den Parlamentswahlen untersucht werden.
+
+### 4.1 EU-Referendum
+
+Während die britischen Regionen Schottland und Nordirland für ein Verbleiben in der EU gestimmt haben, stimmten Wales, und England für den Brexit. Wobei London als Teil von England für den Verbleib in  der EU gestimmt hatte. Vergleicht man die Einwohnerzahl der Landesregionen, dominiert die Bevölkerung Englands (abzüglich London) mit einem Anteil von 69,4% an der Gesamtbevölkerung. In den drei Landesregionen Schottland, Nordirland und London, die für ein Verbleiben gestimmt hatten, lebten zum Zeitpunkt des Referendums 15,6 Mio. Einwohner. Das entspricht nicht einmal einem Viertel der Gesamtbevölkerung.  Daher ist das Ergebnis des Referendums stark von der Bevölkerung Englands dominiert worden.
+
+
+
+```{r biggest anti-brexit regions, echo=FALSE}
+sorted_odds_brexit <- brexitdata %>% 
+  ungroup %>% 
+  arrange(odds_Brexit) %>%
+  mutate(Percentage_Leave = Leave * 100 / tot_Votes, 
+         Percentage_Remain = Remain * 100 / tot_Votes)
+#sorted after percentage of brexit leaves
+kable(head(sorted_odds_brexit) %>% 
+        select(Region, Area, Remain, Leave, Percentage_Remain),
+      caption = "Kommunen mit stärkster Wahlpositionierung gegen Brexit")
+```
+Die fünf Wahlbezirke mit den höchsten Verbleib-Stimmenanteilen sind allesamt Wahlkreise in London sowie Gibraltar und haben einen Remain-Anteil von mindestens 75%. Der Wahlbezirk mit dem höchsten Remain-Anteil befindet sich nicht auf der Britischen Insel, sondern liegt im Süden Spaniens. Das Britische Überseegebiet Gibraltar an der Südküste Spanien hat einen Remain-Anteil von fast 96% und ist ein Ausreißer unter den Wahlbezirken.
+```{r biggest brexit regions, echo=FALSE}
+kable(tail(sorted_odds_brexit) %>%
+        arrange(desc(Percentage_Leave)) %>% 
+        select(Region, Area, Remain, Leave, Percentage_Leave),
+      caption = "Kommunen mit stärkster Wahlpositionierung für Brexit")
+```
+Analog sind die fünf Wahbezirke mit den höchsten Leave-Stimmenanteilen abgebildet. Die fünf Wahlbezirke haben einen Leave-Anteil von mindestens 71 Prozent. Ein Ausreißer ist nicht zu erkennen. Die fünf Wahlbezirke befinden sich in der Region England. Great Yarmouth ist eine Küstenregion an der Nordsee.
+
+```{r local authority shapefile(since brexit data is split in these), echo = FALSE, include=FALSE}
+mapdata <- sf_to_fortified(shapefile_Kommunen, region="lad15nm") #This might take a few minutes
+```
+
+
+```{r with our dataset heatmap, echo=FALSE}
+#length(sort(unique(brexitdata$Area))) #382
+#length(sort(unique(mapdata$id))) #380
+#Grund: Nordirland als eine Kommune dargestellt in Auszählungdaten, 
+#einzelnen Kommunen innerhalb Nordirlands wurden nicht aufgenommen. 
+#Shapefile ohne Nordirland verwendet.
+#Gibraltar nicht auf Karte gelistet.
+
+#Join brexitdata with mapdata
+df <- mapdata %>% inner_join(brexitdata, by = c("id" = "Area"))
+
+
+#highlight highest votes for leave in map
+highest5forbrexit <- (brexitdata %>% 
+                        arrange(desc(Percentage_Leave)))[1:5, ]
+lowest5forbrexit <- (brexitdata %>% 
+                       arrange((Percentage_Leave)))[1:5, ]
+
+df2 <- mapdata %>% inner_join(highest5forbrexit, by = c("id" = "Area"))
+df3 <- mapdata %>% inner_join(lowest5forbrexit, by = c("id" = "Area"))
+
+#Create the heatmap using the ggplot2 package
+gg <- ggplot() + 
+  geom_polygon(data = df, 
+               aes(x = long, y = lat, group = group, fill = Percentage_Leave), 
+               color = NA, size = 0.25) + 
+  geom_polygon(data = df2, 
+               aes(x = long, y = lat, group = group, fill = Percentage_Leave), 
+               color = "black", size = 0.25) + 
+  geom_polygon(data = df3, 
+               aes(x = long, y = lat, group = group, fill = Percentage_Leave), 
+               color = "white", size = 0.25) + 
+  ggtitle("EU Referendum 2016 - Stimmenanteil für Leave in Prozent")
+gg <- gg + coord_fixed(1) #1:1 aspect ratio to prevent map from appearing squashed
+gg <- gg + theme_minimal()
+gg <- gg + theme(panel.grid.major = element_blank(), 
+                 panel.grid.minor = element_blank())
+gg <- gg + theme(axis.title.x=element_blank(), 
+                 axis.text.x = element_blank(), 
+                 axis.ticks.x = element_blank())
+gg <- gg + theme(axis.title.y=element_blank(), 
+                 axis.text.y = element_blank(), 
+                 axis.ticks.y = element_blank())
+gg <- gg + 
+  scale_fill_gradientn(name = "Stimmenanteil in Prozent", 
+                       colours = c("#00BFC4", "#F8766D"))
+print(gg)
+#black: Kommunen mit höchstem Leavestimmenanteil
+#white: Kommunen mit niedrigstem Leavestimmenanteil
+```
+
+Einen geographischen Überblick über die Gesamtheit der 382 Wahlbezirke (ohne Gibraltar) mit ihren Leave-Stimmanteilen verschafft uns das geplottete Shapefile.
+Die fünf Wahlbezirke mit dem höchsten Leave-Anteil sind schwarz umkreist, während die vier Wahlbezirke mit den geringsten Leave-Anteilen (ohne Gibraltar) weiß umrandet sind.
+
+
+```{r Zusammenhangsanalyse Brexit und Alter, echo=FALSE, warning=FALSE}
+constituency_age_2016 <- read_excel("data/constituency_age_2016.xlsx")
+constituency_age_2016$Mean_Age <- 
+  rowSums(data.frame(mapply(`*`, constituency_age_2016[, 4:94], 0:90 + 0.5))) / 
+  constituency_age_2016$`All ages`
+
+estimated_referendum_meanage <- Leave_vote_constituency %>% 
+  inner_join(constituency_age_2016, by = c("PCON11CD" = "Area code")) %>% 
+  select(PCON11CD, Constituency,  Estimated.Leave.proportion, 
+         Mean_Age, Known.result)
+
+#EU-Referendum (Wahlkreise): Schätzung Leave Anteil & Durchschnittsalter
+plot1 <- ggplot(estimated_referendum_meanage, 
+                aes(x = Mean_Age, y = Estimated.Leave.proportion)) +
+  geom_point() +
+  xlab("Durchschnittsalter") +
+  ylab("Geschätzter Leave-Stimmenanteil") +
+  xlim(c(30,50)) +
+  ylim(c(0,1)) +
+  ggtitle("Schätzungen Wahlkreise (632)")
+
+#EU-Referendum (Wahlkreise): Ausgezählte Leave Anteil & Durchschnittsalter
+plot2 <- ggplot(estimated_referendum_meanage, 
+                aes(x = Mean_Age, y = Known.result)) +
+  geom_point() +
+  xlab("Durchschnittsalter") +
+  ylab("Leave-Stimmenanteil") +
+  xlim(c(30,50)) +
+  ylim(c(0,1)) +
+  ggtitle("Ausgezählte Wahlkreise (155)")
+
+#table(is.na(estimated_referendum_meanage$Known.result)) 
+#155 Wahlkreise ausgezählt
+
+library(gridExtra)
+grid.arrange(plot1, plot2, nrow = 1, ncol = 2)
+```
+```{r Korrelationskoeffizienten Schätzung Referendum und Alter, include=FALSE, echo=FALSE}
+cor(estimated_referendum_meanage["Mean_Age"], 
+    estimated_referendum_meanage["Estimated.Leave.proportion"], 
+    use="complete.obs", method="pearson") #0.3330986
+
+cor(estimated_referendum_meanage["Mean_Age"], 
+    estimated_referendum_meanage["Known.result"], 
+    use="complete.obs", method="pearson") #0.3526297
+```
+
+Links Pearson: 0,3331 / Rechts Pearson 0,3526
+Während der Remain-Wahlkampagnen waren in den Medien oft junge Menschen in Großstädten wie London repräsentiert worden. Eine Frage, die man sich stellen kann ist, ob ein Zusammenhang zwischen dem Durchschnittsalter und dem EU-Referendum existiert.
+Das tatsächliche Durchschnittsalter wurde nur in einem fünftel der Wahlkreise berechnet.
+Deshalb ziehen wir zusätzlich eine Schätzung des Durchschnittsalters für 632 Wahlkreise heran.
+Die moderate Korrelation deutet darauf hin, dass ein Zusammenhang zwischen steigendem Durchschnittsalter und steigendem und geschätzten Leave-Stimmenanteil besteht.
+Mit einem Bravais-Pearson-Korrelationskoeffizienten von +0,33 besteht eine moderate positive Korrelation zwischen dem geschätzten Durschnittsalter im Wahlkreis und dem geschätzten Leave-Stimmenanteil.
+Auch im Scatterplot der 155 bekannten Wahlkreise erkennt man eine moderate positive Korrelation.
+
+### 4.2 Parlamentswahlen 2015 - 2019
+
+Innerhalb von vier Jahren hat die UK drei Parlamentswahlen abgehalten. Grund war die Neuwahl im Jahr 2017, da der amtierende Premierminister David Cameron für einen Verbleib geworben hatte und nach dem Wahlausgang für die bevorstehenden Brexit-Verhandlungen zurückgetreten ist. 
+Das House of Commons sitzen überwiegend Abgeordenete, deren Parteien einen Brexit fordern.
+
+
+
+```{r Daten einlesen und bearbeiten, echo=FALSE}
+#eigenerstellte Wahlergebniskathegorisierungen per Excel umgewandelt in csv
+Wahlergebnis15 <- read.csv("data/Wahlergebnis_nach_Gruppen15.csv", sep = ";")
+Wahlergebnis17 <- read.csv("data/Wahlergebnis_nach_Gruppen17.csv", sep = ";")
+Wahlergebnis19 <- read.csv("data/Wahlergebnis_nach_Gruppen19.csv", sep = ";")
+kable(head(Wahlergebnis19), 
+      caption = "Wahlergebnis 2019 nach Parteieneinteilung in 
+      Hard-/Soft-/No-Brexit Ausrichtung \n (2015/-17 analog aufgebaut)")
+
+Wahlergebnis15$Hard.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis15$Hard.Brexit ,regex("%"), ""))
+Wahlergebnis15$Soft.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis15$Soft.Brexit ,regex("%"), ""))
+Wahlergebnis15$No.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis15$No.Brexit ,regex("%"), ""))
+Wahlergebnis17$Hard.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis17$Hard.Brexit ,regex("%"), ""))
+Wahlergebnis17$Soft.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis17$Soft.Brexit ,regex("%"), ""))
+Wahlergebnis17$No.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis17$No.Brexit ,regex("%"), ""))
+Wahlergebnis19$Hard.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis19$Hard.Brexit ,regex("%"), ""))
+Wahlergebnis19$Soft.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis19$Soft.Brexit ,regex("%"), ""))
+Wahlergebnis19$No.Brexit <- 
+  as.numeric(str_replace_all(Wahlergebnis19$No.Brexit ,regex("%"), ""))
+
+constituency_age_2015 <- read_excel("data/constituency_age_2015.xlsx")
+constituency_age_2017 <- read_excel("data/constituency_age_2017.xlsx")
+constituency_age_2019 <- read_excel("data/constituency_age_2019.xlsx")
+constituency_age_2015$Mean_Age <- rowSums(data.frame(mapply(`*`, constituency_age_2015[, 4:94], 0:90 + 0.5))) / constituency_age_2015$`All ages`
+constituency_age_2017$Mean_Age <- rowSums(data.frame(mapply(`*`, constituency_age_2017[, 4:94], 0:90 + 0.5))) / constituency_age_2017$`All ages`
+constituency_age_2019$Mean_Age <- rowSums(data.frame(mapply(`*`, constituency_age_2019[, 4:94], 0:90 + 0.5))) / constituency_age_2019$`All ages`
+
+#originale Wahlergebnisse 2015
+election_results_2015 <- read.csv("data/RESULTS FOR ANALYSIS(2015).csv")
+
+Wahlergebnis15_neu <- Wahlergebnis15 %>% 
+  inner_join(election_results_2015, 
+             by = c("Constituency.Name" = "Constituency.Name")) %>%
+  select(Constituency.Name, Hard.Brexit, Soft.Brexit, 
+         No.Brexit, Mehrheit, Constituency.ID)
+
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Ashton-Under-Lyne$", "Ashton-under-Lyne")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Berwick-Upon-Tweed$", "Berwick-upon-Tweed")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Cities Of London and Westminster$", 
+                  "Cities of London and Westminster")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^City Of Chester$", "City of Chester")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^City Of Durham$", "City of Durham")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Forest Of Dean$", "Forest of Dean")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Isle Of Wight$", "Isle of Wight")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Na h-Eileanan An Iar$", "Na h-Eileanan an Iar")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Newcastle-Under-Lyme$", "Newcastle-under-Lyme")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Newcastle Upon Tyne Central$", 
+                  "Newcastle upon Tyne Central")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Newcastle Upon Tyne East$", "Newcastle upon Tyne East")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Newcastle Upon Tyne North$", "Newcastle upon Tyne North")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Stoke-On-Trent Central$", "Stoke-on-Trent Central")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Stoke-On-Trent North$", "Stoke-on-Trent North")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Stoke-On-Trent South$", "Stoke-on-Trent South")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Stratford-On-Avon$", "Stratford-on-Avon")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Vale Of Clwyd$", "Vale of Clwyd")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Vale Of Glamorgan$", "Vale of Glamorgan")
+Wahlergebnis17$constituency_name <- 
+  str_replace_all(Wahlergebnis17$constituency_name, 
+                  "^Ynys Mon$", "Ynys Môn")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Ashton-Under-Lyne$", "Ashton-under-Lyne")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Berwick-Upon-Tweed$", "Berwick-upon-Tweed")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Cities Of London and Westminster$", 
+                  "Cities of London and Westminster")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^City Of Chester$", "City of Chester")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^City Of Durham$", "City of Durham")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Forest Of Dean$", "Forest of Dean")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Isle Of Wight$", "Isle of Wight")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Na h-Eileanan An Iar$", "Na h-Eileanan an Iar")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Newcastle-Under-Lyme$", "Newcastle-under-Lyme")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Newcastle Upon Tyne Central$", 
+                  "Newcastle upon Tyne Central")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Newcastle Upon Tyne East$", "Newcastle upon Tyne East")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Newcastle Upon Tyne North$", "Newcastle upon Tyne North")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Stoke-On-Trent Central$", "Stoke-on-Trent Central")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Stoke-On-Trent North$", "Stoke-on-Trent North")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Stoke-On-Trent South$", "Stoke-on-Trent South")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Stratford-On-Avon$", "Stratford-on-Avon")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Vale Of Clwyd$", "Vale of Clwyd")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Vale Of Glamorgan$", "Vale of Glamorgan")
+Wahlergebnis19$constituency_name <- 
+  str_replace_all(Wahlergebnis19$constituency_name, 
+                  "^Ynys Mon$", "Ynys Môn")
+```
+
+Das konsultative EU-Referendum war gesetzlich nicht bindend. Dennoch hatten sich alle großen Parteien anlässlich des Leave-Wahlausgangs des Referendums zu den Brexit-Verhandlungen mit der EU positioniert. Die Parteien können nach ihrer Einstellung zum Brexit in drei Gruppen kategorisiert werden. 
+Zu den No-Brexit Parteien gehören unter anderem die Scottish National Party (SNP) und die Liberal Democrats (LibDem). Die beiden größten Parteien sind die Labour Partei und die Conservatives. Die größte Oppositionspartei - Labour - befürwortet einen Soft-Brexit, während die regierenden Conservatives einen Hard-Bexit fordern. 
+
+
+```{r plotte Durchschnittsalter über Anteil Hard-No-Soft-Brexit, echo=FALSE, warning=FALSE}
+p15_h <- ggplot(inner_join(Wahlergebnis15_neu, constituency_age_2015, 
+                           by = c("Constituency.ID" = "Area code")), 
+                aes(x = Mean_Age, y = Hard.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2015") +
+  xlab("Durchschnittsalter") + 
+  ylab("Hard-Brexit (%)")
+p15_s <- ggplot(inner_join(Wahlergebnis15_neu, constituency_age_2015, 
+                           by = c("Constituency.ID" = "Area code")), 
+                aes(x = Mean_Age, y = Soft.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2015") +
+  xlab("Durchschnittsalter") + 
+  ylab("Soft-Brexit (%)")
+p15_n <- ggplot(inner_join(Wahlergebnis15_neu, constituency_age_2015, 
+                           by = c("Constituency.ID" = "Area code")), 
+                aes(x = Mean_Age, y = No.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2015") +
+  xlab("Durchschnittsalter") + 
+  ylab("No-Brexit (%)")
+p17_h <- ggplot(inner_join(Wahlergebnis17, constituency_age_2017, 
+                           by = c("constituency_name" = "Area Name")), 
+                aes(x = Mean_Age, y = Hard.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2017") +
+  xlab("Durchschnittsalter") + 
+  ylab("Hard-Brexit (%)")
+p17_s<- ggplot(inner_join(Wahlergebnis17, constituency_age_2017, 
+                          by = c("constituency_name" = "Area Name")), 
+               aes(x = Mean_Age, y = Soft.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2017") +
+  xlab("Durchschnittsalter") + 
+  ylab("Soft-Brexit (%)")
+p17_n <- ggplot(inner_join(Wahlergebnis17, constituency_age_2017, 
+                           by = c("constituency_name" = "Area Name")), 
+                aes(x = Mean_Age, y = No.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2017") +
+  xlab("Durchschnittsalter") + 
+  ylab("No-Brexit (%)")
+p19_h <- ggplot(inner_join(Wahlergebnis19, constituency_age_2019, 
+                           by = c("constituency_name" = "Area Name")), 
+                aes(x = Mean_Age, y = Hard.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2019") +
+  xlab("Durchschnittsalter") + 
+  ylab("Hard-Brexit (%)")
+p19_s <- ggplot(inner_join(Wahlergebnis19, constituency_age_2019, 
+                           by = c("constituency_name" = "Area Name")), 
+                aes(x = Mean_Age, y = Soft.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2019") +
+  xlab("Durchschnittsalter") + 
+  ylab("Soft-Brexit (%)")
+p19_n <- ggplot(inner_join(Wahlergebnis19, constituency_age_2019, 
+                           by = c("constituency_name" = "Area Name")), 
+                aes(x = Mean_Age, y = No.Brexit)) + 
+  geom_point() + 
+  xlim(c(30,50)) + 
+  ylim(c(0,100)) +
+  ggtitle("Parlamentswahl 2019") +
+  xlab("Durchschnittsalter") + 
+  ylab("No-Brexit (%)")
+```
+```{r plot of hard brexit, echo=FALSE}
+grid.arrange(p15_h, p17_h, p19_h, nrow = 2, ncol = 2)
+```
+(2015) Pearson: 0,4250
+(2017) Pearson: 0,5416
+(2019) Pearson: 0,5319
+Die starke Korrelation von bis zu +0,54 deutet darauf hin, dass ein positiver Zusammenhang zwischen Alter und Hard-Brexit-Haltung besteht.
+Der moderatere Pearson-Korrelationskoeffizient von 2015 kann entspechend gedeutet werden, dass die Kategorisierung von den Conservatives als Hard-Brexit-Partei für das Jahr 2015 womöglich nicht korrekt ist. 
+Im direkten Vergleich der drei Streudiagramme fällt zudem auf, dass die Punktwolke von 2015 zu 2019 nicht nur steiler, sondern auch kompakter um den steigenden Trend liegt. Der Zusammenhang zwischen Durchschnittsalter und Hard-Brexit-Stimmenanteil verfestigt sich also über die Jahre, was sich im Anstieg des Korrelationskoeffizienten von +0,43 (2015) auf +0,54 (2017) widerspiegelt.
+
+```{r plot for soft brexit, echo=FALSE}
+grid.arrange(p15_s, p17_s, p19_s, nrow = 2, ncol = 2)
+```
+(2015) Pearson: -0,5876
+(2017) Pearson: -0,6306
+(2019) Pearson: -0,6621
+Die stark negative Korrelation von bis zu -0,66 deutet darauf hin, dass jüngere Wähler einen gemäßigteren Brexit fordern.
+Der Betrag der Korrelation nimmt dabei von Wahl zu Wahl zu (von -0,59 im Jahr 2015 auf -0,66 im Jahr 2019), sodass sich das in allen drei Diagrammen erkennbare fallende Muster über die Jahre weiter verstärkt.
+
+```{r plot for no brexit, echo=FALSE}
+grid.arrange(p15_n, p17_n, p19_n, nrow = 2, ncol = 2)
+```
+Zusammenhang Durchschnittsalter und No-Brexit
+(2015) Pearson: 0,0887
+(2017) Pearson: 0,1340
+(2019) Pearson: 0,1421
+Es ist kein bzw. kaum ein Zusammenhang zwischen dem Durchschnittsalter im Wahlkreis und einem Wahlsieg für eine No-Brexit-Partei erkennbar.
+Anders als bei den Hard- und Soft-Brexit-Parteien bleibt die Punktwolke über alle drei Wahljahre hinweg nahezu waagerecht und streut breit, sodass auch der leichte Anstieg des Korrelationskoeffizienten (von +0,09 auf +0,14) keinen belastbaren Alterszusammenhang begründet.
+
+
+```{r Korrelationskoeffizient nach Pearson berechnen, include=FALSE, echo=FALSE}
+cor(inner_join(Wahlergebnis15_neu, constituency_age_2015, 
+               by = c("Constituency.ID" = "Area code"))[c("Mean_Age")],
+    inner_join(Wahlergebnis15_neu, constituency_age_2015, 
+               by = c("Constituency.ID" = "Area code"))[c("Hard.Brexit", 
+                                                          "Soft.Brexit", 
+                                                          "No.Brexit")], 
+    use="complete.obs", method="pearson")
+cor(inner_join(Wahlergebnis17, constituency_age_2017, 
+               by = c("constituency_name" = "Area Name"))[c("Mean_Age")],
+    inner_join(Wahlergebnis17, constituency_age_2017, 
+               by = c("constituency_name" = "Area Name"))[c("Hard.Brexit", 
+                                                            "Soft.Brexit", 
+                                                            "No.Brexit")], 
+    use="complete.obs", method="pearson")
+cor(inner_join(Wahlergebnis19, constituency_age_2019, 
+               by = c("constituency_name" = "Area Name"))[c("Mean_Age")],
+    inner_join(Wahlergebnis19, constituency_age_2019, 
+               by = c("constituency_name" = "Area Name"))[c("Hard.Brexit", 
+                                                            "Soft.Brexit", 
+                                                            "No.Brexit")], 
+    use="complete.obs", method="pearson")
+```
+
+
+```{r read csv 151719 nach Gruppen für Karte, echo=FALSE}
+Wahlergebnis_nach_Gruppen <- read.csv("data/Wahlergebnis_nach_Gruppen.csv", 
+                                      sep = ";")
+kable(head(Wahlergebnis_nach_Gruppen %>%
+             select(constituency_name, country_name, 
+                    Mehrheit.2015, Mehrheit.2017, Mehrheit.2019)),
+           caption = "Wahlkreise mit Mehrheitspositionierung der drei Parlamentswahlen")
+```
+
+
+```{r map2 Wahlkreise, include=FALSE, echo=FALSE}
+mapdata <- sf_to_fortified(shapefile_Wahlkreis, region="pcon16nm") 
+```
+
+
+```{r try to put into map shapefile, echo=FALSE}
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Ashton-Under-Lyne$", "Ashton-under-Lyne")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Berwick-Upon-Tweed$", "Berwick-upon-Tweed")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Cities Of London and Westminster$", 
+                  "Cities of London and Westminster")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^City Of Chester$", "City of Chester")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^City Of Durham$", "City of Durham")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Forest Of Dean$", "Forest of Dean")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Isle Of Wight$", "Isle of Wight")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Na h-Eileanan An Iar$", "Na h-Eileanan an Iar")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Newcastle-Under-Lyme$", "Newcastle-under-Lyme")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Newcastle Upon Tyne Central$", 
+                  "Newcastle upon Tyne Central")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Newcastle Upon Tyne East$", "Newcastle upon Tyne East")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Newcastle Upon Tyne North$", "Newcastle upon Tyne North")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Stoke-On-Trent Central$", "Stoke-on-Trent Central")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Stoke-On-Trent North$", "Stoke-on-Trent North")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Stoke-On-Trent South$", "Stoke-on-Trent South")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Stratford-On-Avon$", "Stratford-on-Avon")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Vale Of Clwyd$", "Vale of Clwyd")
+Wahlergebnis_nach_Gruppen$constituency_name <- 
+  str_replace_all(Wahlergebnis_nach_Gruppen$constituency_name, 
+                  "^Vale Of Glamorgan$", "Vale of Glamorgan")
+
+df <- mapdata %>% inner_join(Wahlergebnis_nach_Gruppen, 
+                             by = c("id" = "constituency_name"))
+
+gg1 <- ggplot() + 
+  geom_polygon(data = df, aes(x = long, y = lat, group = group, 
+                               fill = Mehrheit.2015), color = NA, size = 0.25) + 
+  ggtitle("Parlamentswahl 2015") #nach kategorisierter Einordnung der Parteien
+gg1 <- gg1 + coord_fixed(1)
+gg1 <- gg1 + theme_minimal()
+gg1 <- gg1 + theme(panel.grid.major = element_blank(), 
+                 panel.grid.minor = element_blank() ,legend.position = "none")
+gg1 <- gg1 + theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+                 axis.ticks.x = element_blank())
+gg1 <- gg1 + theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+                 axis.ticks.y = element_blank())
+gg1 <- gg1 + 
+  scale_fill_manual(name = "Stärkste Gruppe", breaks = c("Hard Brexit", 
+                                                         "Soft Brexit", 
+                                                         "No Brexit"), 
+                    values = c("#F8766D", "#7CAE00", "#00BFC4")) + 
+  theme(legend.position = "none", legend.text = element_text(size = 15))
+
+gg2 <- ggplot() + geom_polygon(data = df, aes(x = long, y = lat, group = group, 
+                                             fill = Mehrheit.2017), 
+                              color = NA, size = 0.25) + 
+  ggtitle("Parlamentswahl 2017") #nach kategorisierter Einordnung der Parteien
+gg2 <- gg2 + coord_fixed(1)
+gg2 <- gg2 + theme_minimal()
+gg2 <- gg2 + theme(panel.grid.major = element_blank(), 
+                 panel.grid.minor = element_blank())
+gg2 <- gg2 + theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+                 axis.ticks.x = element_blank())
+gg2 <- gg2 + theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+                 axis.ticks.y = element_blank())
+gg2 <- gg2 + scale_fill_manual(name = "Stärkste Gruppe", breaks = c("Hard Brexit", 
+                                                                 "Soft Brexit", 
+                                                                 "No Brexit"), 
+                             values = c("#F8766D", "#7CAE00", "#00BFC4")) +
+  #Legende in die leere Fläche oben links im Panel (neben Schottland)
+  #setzen, mit Verankerung an der oberen linken Ecke der Legende.
+  theme(legend.position = c(0.02, 0.78), legend.justification = c(0, 1), 
+        legend.text = element_text(size = 10))
+
+gg3 <- ggplot() + geom_polygon(data = df, aes(x = long, y = lat, group = group, 
+                                             fill = Mehrheit.2019), 
+                              color = NA, size = 0.25) + 
+  ggtitle("Parlamentswahl 2019")
+gg3 <- gg3 + coord_fixed(1)
+gg3 <- gg3 + theme_minimal()
+gg3 <- gg3 + theme(panel.grid.major = element_blank(), 
+                 panel.grid.minor = element_blank())
+gg3 <- gg3 + theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+                 axis.ticks.x = element_blank())
+gg3 <- gg3 + theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+                 axis.ticks.y = element_blank())
+gg3 <- gg3 + scale_fill_manual(name = "Stärkste Gruppe",breaks = c("Hard Brexit", 
+                                                                 "Soft Brexit", 
+                                                                 "No Brexit"), 
+                             values = c("#F8766D", "#7CAE00", "#00BFC4")) +
+  theme(legend.position = "none", legend.text = element_text(size = 15))
+
+grid.arrange(gg1, gg2, gg3, nrow = 1, ncol = 3, 
+             top = "Stärkste Gruppe der Parlamentswahlen nach Kategorien")
+```
+
+Anhand der Parlamentswahlen 2015, 2017 und 2019 soll verglichen werden, wie sich die No-Brexit, Soft-Brexit und Hard-Brexit Parteien Forderungen innerhalb der UK entwickelt haben.
+Die drei Brexit-Abstufungen sind praktisch ordinalskalierte Variablen und werden geographisch visualisiert. Im Parlamentswahljahr 2015 - einem Jahr vor dem EU-Referendum - sind noch in weiten Teilen Englands, Wales und Schottlands Soft-Brexit-Parteien die stärkste Partei gewesen. Vergleicht man die Karte von 2015 mit 2017 und 2019, erkennt man eine Radikalisierung in England und Wales, von einem Soft-Brexit hin zu einem Hard-Brexit. Umgekehrt prägten im Jahr 2015 sogenannte Soft-Brexit Gruppen einen großen Teil der Region, die in den darauffolgenden Parlamentswahlen durch No-Brexit Parteien abgelöst wurden. Ähnliches ist in Nordirland zu beobachten, in welchem anfangs die Hard-Brexit Parteien dominierten und durch No-Brexit bzw. Soft-Brexit Parteien ersetzt wurden.
+Besonders deutlich wird der Jahresvergleich in Schottland: Dominierten dort 2015 noch Soft-Brexit-Parteien weite Teile der Fläche, so färbt sich die Karte bis 2017 und 2019 nahezu flächendeckend in die No-Brexit-Farbe ein. In England und Wales verläuft die Entwicklung spiegelbildlich, denn die zunächst gemischte Verteilung aus Soft- und Hard-Brexit weicht über die drei Wahlen hinweg einer immer geschlosseneren Hard-Brexit-Mehrheit. Die drei nebeneinandergestellten Karten machen diesen Trend auf einen Blick sichtbar, da sich dieselben Wahlkreise von Wahl zu Wahl systematisch umfärben.
+Jedoch ist der zeitliche Vergleich - insbesondere zwischen 2015 und 2019 - mit Vorsicht zu genießen. Denn insbesondere die Hard-Brexit Conservatives haben vor dem Referendum noch gemäßigte Vorsitzende gehabt und einen Premierminister gestellt. Und erst nach dem Referendum 2016 haben sich die radikalen Hard-Brexit-Flügel zunehmend durchgesetzt.
+
+
+```{r Daten einlesen, echo=FALSE, warning=FALSE}
+GE2015_constituency_results <- 
+  read.csv("data/2015-UK-general-election-data-results - CSV/RESULTS FOR ANALYSIS.csv")
+GE2017_constituency_result <- 
+  read.csv("data/HoC-GE2017-constituency-results.csv")
+GE2017_result_by_candidate <- 
+  read.csv("data/HoC-GE2017-results-by-candidate.csv")
+GE2019_constituency_result <- 
+  read.csv("data/HoC-GE2019-results-by-constituency-csv.csv")
+GE2019_result_by_candidate <- 
+  read.csv("data/HoC-GE2019-results-by-candidate-csv.csv")
+population_by_age <- 
+  read_excel("data/population-by-age_anders_sortiert.xlsx")
+population_by_age_smaller_2016 <- 
+  population_by_age[population_by_age$Date == 2016, c(1:9, 11)]
+population_by_age_smaller_2016 <- 
+  spread(population_by_age_smaller_2016, 
+         key = colnames(population_by_age_smaller_2016) [1], 
+         value = colnames(population_by_age_smaller_2016) [10])
+Leave_vote_constituency <- 
+  read.csv("data/Revised estimates of leave vote in Westminster constituencies - demog_based_estimates.csv")
+
+mapdata <- sf_to_fortified(shapefile, region="pcon19nm")
+
+mapdata.2 <- sf_to_fortified(shapefile.2, region="LAD19NM")
+
+Neuwaehler <- read_excel("data/Neuwähler.xlsx")
+```
+
+```{r Wahlergebnisse formatieren, echo=FALSE}
+#Füge Daten zusammen
+GE2015_result123 <- GE2015_constituency_results[1:650, c(5, 2:4, 8:9, 12:147)]
+GE2015_result123[is.na(GE2015_result123)] <- 0
+GE2015_result123$Electorate <- 
+  as.numeric(sub(",", "", GE2015_result123$Electorate, fixed = TRUE))
+GE2015_result123$Total.number.of.valid.votes.counted <- 
+  as.numeric(sub(",", "", GE2015_result123$Total.number.of.valid.votes.counted,
+                 fixed = TRUE))
+GE2015_result123$votes_1 <- 
+  (GE2015_result123$SDLP + GE2015_result123$Alliance + GE2015_result123$SNP + 
+     GE2015_result123$LD + GE2015_result123$PC +
+     GE2015_result123$Green + 
+     GE2015_result123$SF) / 
+  GE2015_result123$Total.number.of.valid.votes.counted
+GE2015_result123$votes_2 <- 
+  (GE2015_result123$UUP + GE2015_result123$Lab + GE2015_result123$DUP + 
+     GE2015_result123$Lab.Co.op) / 
+  GE2015_result123$Total.number.of.valid.votes.counted
+GE2015_result123$votes_3 <- 
+  (GE2015_result123$C + 
+     GE2015_result123$UKIP) / 
+  GE2015_result123$Total.number.of.valid.votes.counted
+GE2015_result123$votes_others <- 
+  1 - GE2015_result123$votes_1 - GE2015_result123$votes_2 - 
+  GE2015_result123$votes_3
+GE2015_result123 <- GE2015_result123[ , -c(7:142)]
+GE2017_result123 <- GE2017_constituency_result[ , c(1, 3, 5:6, 12:13, 16:28)]
+GE2017_result123$votes_1 <- 
+  (GE2017_result123$alliance + GE2017_result123$sdlp + GE2017_result123$snp + 
+     GE2017_result123$ld + GE2017_result123$pc + GE2017_result123$green + 
+     GE2017_result123$sf) / GE2017_result123$valid_votes
+GE2017_result123$votes_2 <- 
+  (GE2017_result123$uup + GE2017_result123$lab + GE2017_result123$dup) / 
+  GE2017_result123$valid_votes
+GE2017_result123$votes_3 <- 
+  (GE2017_result123$con + GE2017_result123$ukip) / GE2017_result123$valid_votes
+GE2017_result123$votes_others <- 
+  1- GE2017_result123$votes_1 - GE2017_result123$votes_2 - 
+  GE2017_result123$votes_3
+GE2017_result123 <- GE2017_result123[ , -c(7:19)]
+GE2019_result123 <- GE2019_constituency_result[ , c(1, 3, 5:6, 15:16, 19:31)]
+GE2019_result123$votes_1 <- 
+  (GE2019_result123$alliance + GE2019_result123$sdlp + GE2019_result123$snp + 
+     GE2019_result123$ld + GE2019_result123$pc + GE2019_result123$green + 
+     GE2019_result123$sf) / GE2019_result123$valid_votes
+GE2019_result123$votes_2 <- 
+  (GE2019_result123$uup + GE2019_result123$lab + GE2019_result123$dup) / 
+  GE2019_result123$valid_votes
+GE2019_result123$votes_3 <- 
+  (GE2019_result123$con + GE2019_result123$brexit) / 
+  GE2019_result123$valid_votes
+GE2019_result123$votes_others <- 1- GE2019_result123$votes_1 - 
+  GE2019_result123$votes_2 - GE2019_result123$votes_3
+GE2019_result123 <- GE2019_result123[ , -c(7:19)]
+```
+
+```{r average age, echo=FALSE}
+population_by_age_2015 <- read_excel("data/constituency_age_2015.xlsx")
+population_by_age_2016 <- read_excel("data/constituency_age_2016.xlsx")
+population_by_age_2017 <- read_excel("data/constituency_age_2017.xlsx")
+population_by_age_2019 <- read_excel("data/constituency_age_2019.xlsx")
+population_by_age_2015$avg_age <- 
+  rowSums(data.frame(mapply(`*`, population_by_age_2015[ , 4:94], 0:90 + 0.5))) / 
+  population_by_age_2015$`All ages`
+population_by_age_2016$avg_age <- 
+  rowSums(data.frame(mapply(`*`, population_by_age_2016[ , 4:94], 0:90 + 0.5))) / 
+  population_by_age_2016$`All ages`
+population_by_age_2017$avg_age <- 
+  rowSums(data.frame(mapply(`*`, population_by_age_2017[ , 4:94], 0:90 + 0.5))) / 
+  population_by_age_2017$`All ages`
+population_by_age_2019$avg_age <- 
+  rowSums(data.frame(mapply(`*`, population_by_age_2019[ , 4:94], 0:90 + 0.5))) / 
+  population_by_age_2019$`All ages`
+```
+
+```{r Ausländerquote, echo=FALSE, include=FALSE}
+library(plyr)
+GE2015_result123_auslaenderq <- GE2015_result123
+GE2015_result123_auslaenderq$adj_electorate <- 
+  GE2015_result123$Electorate - 
+  (106000/sum(GE2015_result123$Electorate))*GE2015_result123$Electorate
+GE2017_result123_auslaenderq <- GE2017_result123
+GE2017_result123_auslaenderq$adj_electorate <- 
+  GE2017_result123$electorate - 
+  (285000/sum(GE2017_result123$electorate))*GE2017_result123$electorate
+GE2019_result123_auslaenderq <- GE2019_result123
+GE2019_result123_auslaenderq$adj_electorate <- 
+  GE2019_result123$electorate - 
+  (233000/sum(GE2019_result123$electorate))*GE2019_result123$electorate
+Neuwaehler_2015 <- Neuwaehler[Neuwaehler$Year == 2015, c(1:3, 7)]
+Neuwaehler_2017 <- Neuwaehler[Neuwaehler$Year == 2017, c(1:3, 7)]
+Neuwaehler_2019 <- Neuwaehler[Neuwaehler$Year == 2019, c(1:3, 7)]
+colnames(GE2015_result123_auslaenderq) [1] <- "Constituency.ID"
+colnames(GE2017_result123_auslaenderq) [1] <- "Constituency.ID"
+colnames(GE2019_result123_auslaenderq) [1] <- "Constituency.ID"
+colnames(Neuwaehler_2015) [1] <- "Constituency.ID"
+colnames(Neuwaehler_2017) [1] <- "Constituency.ID"
+colnames(Neuwaehler_2019) [1] <- "Constituency.ID"
+GE2015_auslaenderq <- 
+  join(GE2015_result123_auslaenderq, Neuwaehler_2015, by = "Constituency.ID")
+GE2017_auslaenderq <- 
+  join(GE2017_result123_auslaenderq, Neuwaehler_2017, by = "Constituency.ID")
+GE2019_auslaenderq <- 
+  join(GE2019_result123_auslaenderq, Neuwaehler_2019, by = "Constituency.ID")
+GE2015_auslaenderq$auslaenderq <- 1- GE2015_auslaenderq$adj_electorate / 
+  GE2015_auslaenderq$`Gesamtbevölkerung über 18`
+GE2017_auslaenderq$auslaenderq <- 1- GE2017_auslaenderq$adj_electorate / 
+  GE2017_auslaenderq$`Gesamtbevölkerung über 18`
+GE2019_auslaenderq$auslaenderq <- 1- GE2019_auslaenderq$adj_electorate / 
+  GE2019_auslaenderq$`Gesamtbevölkerung über 18`
+GE2015_auslaenderq$auslaenderq[which(GE2015_auslaenderq$auslaenderq < 0)] <- 0
+GE2017_auslaenderq$auslaenderq[which(GE2017_auslaenderq$auslaenderq < 0)] <- 0
+GE2019_auslaenderq$auslaenderq[which(GE2019_auslaenderq$auslaenderq < 0)] <- 0
+BREXIT_2016_help <- GE2015_auslaenderq[ , c(1, ncol(GE2015_auslaenderq))]
+BREXIT_2016_auslaenderq <- Leave_vote_constituency
+colnames(BREXIT_2016_auslaenderq) [2] <- "Constituency.ID"
+BREXIT_2016_auslaenderq <- 
+  join(BREXIT_2016_auslaenderq, BREXIT_2016_help, by = "Constituency.ID")
+```
+
+```{r density, echo=FALSE}
+density_2019 <- read.csv("data/density_constituencies.csv")
+population_by_age_2015_2 <- read_excel("data/constituency_age_2015.xlsx")
+population_by_age_2016_2 <- read_excel("data/constituency_age_2016.xlsx")
+population_by_age_2017_2 <- read_excel("data/constituency_age_2017.xlsx")
+population_by_age_2019_2 <- read_excel("data/constituency_age_2019.xlsx")
+colnames(density_2019) [4] <- colnames(population_by_age_2019_2) [1]
+size_constituencies_help <- 
+  join(density_2019, population_by_age_2019_2, 
+       by = colnames(population_by_age_2019_2) [1])
+size_constituencies <- size_constituencies_help[ , c(2, 4)]
+size_constituencies$size <- 
+  size_constituencies_help$`All ages` / size_constituencies_help$density
+density_2015_help <- density_2019
+colnames(density_2015_help) [4] <- colnames(population_by_age_2015_2) [1]
+density_2015_help <- 
+  join(density_2015_help, population_by_age_2015_2, 
+       by = colnames(population_by_age_2015_2) [1])
+density_2015_help <- 
+  join(density_2015_help, size_constituencies, 
+       by = colnames(population_by_age_2015_2) [1])
+density_2015_help$density <- 
+  density_2015_help$`All ages` / density_2015_help$size
+density_2015_help$log_density <- log(density_2015_help$density)
+density_2015 <- density_2015_help[ , c(2:5)]
+density_2016_help <- density_2019
+colnames(density_2016_help) [4] <- colnames(population_by_age_2016_2) [1]
+density_2016_help <- 
+  join(density_2016_help, population_by_age_2016_2, 
+       by = colnames(population_by_age_2016_2) [1])
+density_2016_help <- 
+  join(density_2016_help, size_constituencies, 
+       by = colnames(population_by_age_2016_2) [1])
+density_2016_help$density <- 
+  density_2016_help$`All ages` / density_2016_help$size
+density_2016_help$log_density <- log(density_2016_help$density)
+density_2016 <- density_2016_help[ , c(2:5)]
+density_2017_help <- density_2019
+colnames(density_2017_help) [4] <- colnames(population_by_age_2017_2) [1]
+density_2017_help <- 
+  join(density_2017_help, population_by_age_2017_2, 
+       by = colnames(population_by_age_2017_2) [1])
+density_2017_help <- 
+  join(density_2017_help, size_constituencies, 
+       by = colnames(population_by_age_2017_2) [1])
+density_2017_help$density <- 
+  density_2017_help$`All ages` / density_2017_help$size
+density_2017_help$log_density <- log(density_2017_help$density)
+density_2017 <- density_2017_help[ , c(2:5)]
+```
+
+```{r Wirtschaftskraft, echo=FALSE}
+Wirtschaftskraft <- read.csv("data/37badfc8.csv")
+Wirtschaftskraft$NUTS1.Regions [1] <- "North East"
+Wirtschaftskraft$NUTS1.Regions [2] <- "North West"
+Wirtschaftskraft$NUTS1.Regions [4] <- "East Midlands"
+Wirtschaftskraft$NUTS1.Regions [5] <- "West Midlands"
+Wirtschaftskraft$NUTS1.Regions [6] <- "East"
+Wirtschaftskraft$NUTS1.Regions [8] <- "South East"
+Wirtschaftskraft$NUTS1.Regions [9] <- "South West"
+colnames(Wirtschaftskraft) [1] <- "Region"
+GE2015_economy <- join(GE2015_result123, Wirtschaftskraft, by = "Region")
+Wirtschaftskraft$Region [6] <- "East of England"
+BREXIT_2016_economy <- join(Leave_vote_constituency, Wirtschaftskraft, 
+                            by = "Region")
+colnames(Wirtschaftskraft) [1] <- "region_name"
+Wirtschaftskraft$region_name [6] <- "East"
+GE2017_economy <- join(GE2017_result123, Wirtschaftskraft, by = "region_name")
+GE2019_economy <- join(GE2019_result123, Wirtschaftskraft, by = "region_name")
+```
+
+```{r alle Einflussgrössen in einer Tabelle, echo=FALSE}
+colnames(population_by_age_2015) [1] <- "Constituency.ID"
+colnames(density_2015) [3] <- "Constituency.ID"
+GE2015_result123_Einflussgroessen <- 
+  join(GE2015_result123, population_by_age_2015, by = "Constituency.ID")
+GE2015_result123_Einflussgroessen <- 
+  join(GE2015_result123_Einflussgroessen, GE2015_auslaenderq, 
+       by = "Constituency.ID")
+GE2015_result123_Einflussgroessen <- 
+  join(GE2015_result123_Einflussgroessen, density_2015, by = "Constituency.ID")
+GE2015_result123_Einflussgroessen <- 
+  join(GE2015_result123_Einflussgroessen, GE2015_economy, 
+       by = "Constituency.ID")
+GE2015_result123_Einflussgroessen <- 
+  GE2015_result123_Einflussgroessen[ , c(1:10, 12, 104, 114, 117, 118, 120:121, 133)]
+colnames(GE2015_result123_Einflussgroessen) [ncol(GE2015_result123_Einflussgroessen)] <- 
+  "GDP per head"
+colnames(population_by_age_2017) [1] <- "Constituency.ID"
+colnames(density_2017) [3] <- "Constituency.ID"
+colnames(GE2017_result123) [1] <- "Constituency.ID"
+colnames(GE2017_economy) [1] <- "Constituency.ID"
+GE2017_result123_Einflussgroessen <- 
+  join(GE2017_result123, population_by_age_2017, by = "Constituency.ID")
+GE2017_result123_Einflussgroessen <- 
+  join(GE2017_result123_Einflussgroessen, GE2017_auslaenderq, 
+       by = "Constituency.ID")
+GE2017_result123_Einflussgroessen <- 
+  join(GE2017_result123_Einflussgroessen, density_2017, by = "Constituency.ID")
+GE2017_result123_Einflussgroessen <- 
+  join(GE2017_result123_Einflussgroessen, GE2017_economy, 
+       by = "Constituency.ID")
+GE2017_result123_Einflussgroessen <- 
+  GE2017_result123_Einflussgroessen[ , c(1:10, 12, 104, 114, 117, 118, 120:121, 133)]
+colnames(GE2017_result123_Einflussgroessen) [ncol(GE2017_result123_Einflussgroessen)] <- 
+  "GDP per head"
+colnames(population_by_age_2019) [1] <- "Constituency.ID"
+colnames(density_2019) [4] <- "Constituency.ID"
+colnames(GE2019_result123) [1] <- "Constituency.ID"
+colnames(GE2019_economy) [1] <- "Constituency.ID"
+GE2019_result123_Einflussgroessen <- 
+  join(GE2019_result123, density_2019, by = "Constituency.ID")
+GE2019_result123_Einflussgroessen <- 
+  join(GE2019_result123_Einflussgroessen, population_by_age_2019, 
+       by = "Constituency.ID")
+GE2019_result123_Einflussgroessen <- 
+  join(GE2019_result123_Einflussgroessen, GE2019_auslaenderq, 
+       by = "Constituency.ID")
+GE2019_result123_Einflussgroessen <- 
+  join(GE2019_result123_Einflussgroessen, GE2019_economy, 
+       by = "Constituency.ID")
+GE2019_result123_Einflussgroessen <- 
+  GE2019_result123_Einflussgroessen[ , c(1:10, 16, 108, 118, 121, 122, 13, 14, 134)]
+colnames(GE2019_result123_Einflussgroessen) [ncol(GE2019_result123_Einflussgroessen)] <- 
+  "GDP per head"
+colnames(population_by_age_2016) [1] <- "Constituency.ID"
+colnames(density_2016) [3] <- "Constituency.ID"
+colnames(Leave_vote_constituency) [2] <- "Constituency.ID"
+colnames(BREXIT_2016_economy) [2] <- "Constituency.ID"
+BREXIT_2016_Einflussgroessen <- 
+  join(Leave_vote_constituency, population_by_age_2016, by = "Constituency.ID")
+BREXIT_2016_Einflussgroessen <- 
+  join(BREXIT_2016_Einflussgroessen, BREXIT_2016_auslaenderq, by = "Constituency.ID")
+BREXIT_2016_Einflussgroessen <- 
+  join(BREXIT_2016_Einflussgroessen, density_2016, by = "Constituency.ID")
+BREXIT_2016_Einflussgroessen <- 
+  join(BREXIT_2016_Einflussgroessen, BREXIT_2016_economy, by = "Constituency.ID")
+BREXIT_2016_Einflussgroessen <- 
+  BREXIT_2016_Einflussgroessen[ , c(2:9, 12, 104, 114, 116, 117, 129)]
+colnames(BREXIT_2016_Einflussgroessen) [ncol(BREXIT_2016_Einflussgroessen)] <- 
+  "GDP per head"
+```
+
+```{r Bereinigung Daten, echo=FALSE}
+#Erstelle Lineares Modell, in der die Wahlergebnisse nach Durschschnittsalter,
+#Bevölkerungsdichte, Ausländerquote und Wirtschaftskraft bereinigt werden.
+total.model.2015.votes.1 <- 
+  lm(data = GE2015_result123_Einflussgroessen, 
+     votes_1 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2015_result123_Einflussgroessen$votes_1_ber <- total.model.2015.votes.1$res
+total.model.2015.votes.2 <- 
+  lm(data = GE2015_result123_Einflussgroessen, 
+     votes_2 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2015_result123_Einflussgroessen$votes_2_ber <- total.model.2015.votes.2$res
+total.model.2015.votes.3 <- 
+  lm(data = GE2015_result123_Einflussgroessen, 
+     votes_3 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2015_result123_Einflussgroessen$votes_3_ber <- total.model.2015.votes.3$res
+total.model.2017.votes.1 <- 
+  lm(data = GE2017_result123_Einflussgroessen, 
+     votes_1 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2017_result123_Einflussgroessen$votes_1_ber <- total.model.2017.votes.1$res
+total.model.2017.votes.2 <- 
+  lm(data = GE2017_result123_Einflussgroessen, 
+     votes_2 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2017_result123_Einflussgroessen$votes_2_ber <- total.model.2017.votes.2$res
+total.model.2017.votes.3 <- 
+  lm(data = GE2017_result123_Einflussgroessen, 
+     votes_3 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2017_result123_Einflussgroessen$votes_3_ber <- total.model.2017.votes.3$res
+total.model.2019.votes.1 <- 
+  lm(data = GE2019_result123_Einflussgroessen, 
+     votes_1 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2019_result123_Einflussgroessen$votes_1_ber <- total.model.2019.votes.1$res
+total.model.2019.votes.2 <- 
+  lm(data = GE2019_result123_Einflussgroessen, 
+     votes_2 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2019_result123_Einflussgroessen$votes_2_ber <- total.model.2019.votes.2$res
+total.model.2019.votes.3 <- 
+  lm(data = GE2019_result123_Einflussgroessen, 
+     votes_3 ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2019_result123_Einflussgroessen$votes_3_ber <- total.model.2019.votes.3$res
+total.model.2016.leave.votes <- 
+  lm(data = BREXIT_2016_Einflussgroessen, 
+     Figure.to.use ~ avg_age + auslaenderq + density + `GDP per head`)
+BREXIT_2016_Einflussgroessen$leave_vote_ber <- total.model.2016.leave.votes$res
+```
+
+```{r Wahlströme, echo=FALSE}
+#Stelle Unterschiede im Wahlverhalten zwischen den Jahren als Wahlströme dar
+Wahlstrom_2015_zu_2017 <- 
+  join(GE2015_result123_Einflussgroessen, GE2017_result123_Einflussgroessen, 
+       by = "Constituency.ID")
+colnames(Wahlstrom_2015_zu_2017) [27:29] <- 
+  c("17_votes_1", "17_votes_2", "17_votes_3")
+colnames(Wahlstrom_2015_zu_2017) [39:41] <- 
+  c("17_votes_2_ber", "17_votes_1_ber", "17_votes_3_ber")
+Wahlstrom_2015_zu_2017$change_votes_1 <- 
+  Wahlstrom_2015_zu_2017$`17_votes_1` - Wahlstrom_2015_zu_2017$votes_1
+Wahlstrom_2015_zu_2017$change_votes_2 <- 
+  Wahlstrom_2015_zu_2017$`17_votes_2` - Wahlstrom_2015_zu_2017$votes_2
+Wahlstrom_2015_zu_2017$change_votes_3 <- 
+  Wahlstrom_2015_zu_2017$`17_votes_3` - Wahlstrom_2015_zu_2017$votes_3
+Wahlstrom_2015_zu_2017 <- 
+  join(Wahlstrom_2015_zu_2017, BREXIT_2016_Einflussgroessen, 
+       by = "Constituency.ID")
+Wahlstrom_2015_zu_2017 <- Wahlstrom_2015_zu_2017[ , c(1:44, 46:49, 51, 58)]
+Wahlstrom_2017_zu_2019 <- 
+  join(GE2017_result123_Einflussgroessen, GE2019_result123_Einflussgroessen, 
+       by = "Constituency.ID")
+colnames(Wahlstrom_2017_zu_2019) [27:29] <- 
+  c("19_votes_1", "19_votes_2", "19_votes_3")
+colnames(Wahlstrom_2017_zu_2019) [39:41] <- 
+  c("19_votes_3_ber", "19_votes_1_ber", "19_votes_2_ber")
+Wahlstrom_2017_zu_2019$change_votes_1 <- 
+  Wahlstrom_2017_zu_2019$`19_votes_1` - Wahlstrom_2017_zu_2019$votes_1
+Wahlstrom_2017_zu_2019$change_votes_2 <- 
+  Wahlstrom_2017_zu_2019$`19_votes_2` - Wahlstrom_2017_zu_2019$votes_2
+Wahlstrom_2017_zu_2019$change_votes_3 <- 
+  Wahlstrom_2017_zu_2019$`19_votes_3` - Wahlstrom_2017_zu_2019$votes_3
+Wahlstrom_2017_zu_2019 <- 
+  join(Wahlstrom_2017_zu_2019, BREXIT_2016_Einflussgroessen, 
+       by = "Constituency.ID")
+Wahlstrom_2017_zu_2019 <- Wahlstrom_2017_zu_2019[ , c(1:44, 46:49, 51, 58)]
+Wahlstrom_2017_zu_2019[
+  Wahlstrom_2017_zu_2019$constituency_name == "Chorley", ]$change_votes_1 <- NA
+Wahlstrom_2017_zu_2019[
+  Wahlstrom_2017_zu_2019$constituency_name == "Chorley", ]$change_votes_2 <- NA
+Wahlstrom_2017_zu_2019[
+  Wahlstrom_2017_zu_2019$constituency_name == "Chorley", ]$change_votes_3 <- NA
+Wahlstrom_2017_zu_2019[
+  Wahlstrom_2017_zu_2019$constituency_name == "Buckingham", ]$change_votes_1 <- NA
+Wahlstrom_2017_zu_2019[
+  Wahlstrom_2017_zu_2019$constituency_name == "Buckingham", ]$change_votes_2 <- NA
+Wahlstrom_2017_zu_2019[
+  Wahlstrom_2017_zu_2019$constituency_name == "Buckingham", ]$change_votes_3 <- NA
+Wahlstrom_2015_zu_2019 <- 
+  join(GE2015_result123_Einflussgroessen, GE2019_result123_Einflussgroessen, 
+       by = "Constituency.ID")
+colnames(Wahlstrom_2015_zu_2019) [27:29] <- 
+  c("19_votes_1", "19_votes_2", "19_votes_3")
+colnames(Wahlstrom_2015_zu_2019) [39:41] <- 
+  c("19_votes_3_ber", "19_votes_1_ber", "19_votes_2_ber")
+Wahlstrom_2015_zu_2019$change_votes_1 <- 
+  Wahlstrom_2015_zu_2019$`19_votes_1` - Wahlstrom_2015_zu_2019$votes_1
+Wahlstrom_2015_zu_2019$change_votes_2 <- 
+  Wahlstrom_2015_zu_2019$`19_votes_2` - Wahlstrom_2015_zu_2019$votes_2
+Wahlstrom_2015_zu_2019$change_votes_3 <- 
+  Wahlstrom_2015_zu_2019$`19_votes_3` - Wahlstrom_2015_zu_2019$votes_3
+Wahlstrom_2015_zu_2019 <- 
+  join(Wahlstrom_2015_zu_2019, BREXIT_2016_Einflussgroessen, 
+       by = "Constituency.ID")
+Wahlstrom_2015_zu_2019 <- Wahlstrom_2015_zu_2019[ , c(1:44, 46:49, 51, 58)]
+Wahlstrom_2015_zu_2019[
+  Wahlstrom_2015_zu_2019$constituency_name == "Chorley", ]$change_votes_1 <- NA
+Wahlstrom_2015_zu_2019[
+  Wahlstrom_2015_zu_2019$constituency_name == "Chorley", ]$change_votes_2 <- NA
+Wahlstrom_2015_zu_2019[
+  Wahlstrom_2015_zu_2019$constituency_name == "Chorley", ]$change_votes_3 <- NA
+Wahlstrom_2015_zu_2019[
+  Wahlstrom_2015_zu_2019$constituency_name == "Buckingham", ]$change_votes_1 <- NA
+Wahlstrom_2015_zu_2019[
+  Wahlstrom_2015_zu_2019$constituency_name == "Buckingham", ]$change_votes_2 <- NA
+Wahlstrom_2015_zu_2019[
+  Wahlstrom_2015_zu_2019$constituency_name == "Buckingham", ]$change_votes_3 <- NA
+```
+
+```{r Auswirkungen von Brexit-Wahl zwischen 2015 zu 2017, include=FALSE}
+#Betrachte Einfluss vom Referendum auf Wahlverhalten zwischen 2015&2017
+Modell.Wahlstrom.2015.2017.votes.1 <- 
+  lm(data = Wahlstrom_2015_zu_2017, change_votes_1 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2017.votes.1)
+Wahlstrom_2015_zu_2017$country_help <- 
+  ifelse(Wahlstrom_2015_zu_2017$Country == "Scotland", "Schottland", "Rest UK")
+Wahlstrom_2015_zu_2017$country_help <- 
+  as.factor(Wahlstrom_2015_zu_2017$country_help)
+Wahlstrom_2015_zu_2017$country_help <- 
+  factor(Wahlstrom_2015_zu_2017$country_help, 
+         levels = rev(levels(Wahlstrom_2015_zu_2017$country_help)))
+plot_nobrexit1517 <-ggplot(data = Wahlstrom_2015_zu_2017, 
+       aes(x = Figure.to.use, y = change_votes_1)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung No-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil No Brexit von 2015 bis 2017")
+Modell.Wahlstrom.2015.2017.votes.2 <- 
+  lm(data = Wahlstrom_2015_zu_2017, change_votes_2 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2017.votes.2)
+plot_softbrexit1517 <- ggplot(data = Wahlstrom_2015_zu_2017, 
+       aes(x = Figure.to.use, y = change_votes_2)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung Soft-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Soft Brexit von 2015 bis 2017")
+Modell.Wahlstrom.2015.2017.votes.3 <- 
+  lm(data = Wahlstrom_2015_zu_2017, change_votes_3 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2017.votes.3)
+plot_hardbrexit1517 <- ggplot(data = Wahlstrom_2015_zu_2017, 
+       aes(x = Figure.to.use, y = change_votes_3)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.125, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung Hard-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Hard-Brexit in Zusammenhang \nmit Leave-Stimmenanteil (2015-2017)")
+```
+
+```{r Auswirkungen von Brexit-Wahl zwischen 2017 zu 2019, include=FALSE}
+#Betrachte Einfluss vom Referendum auf Wahlverhalten zwischen 2017&2019
+Modell.Wahlstrom.2017.2019.votes.1 <- 
+  lm(data = Wahlstrom_2017_zu_2019, change_votes_1 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2017.2019.votes.1)
+Wahlstrom_2017_zu_2019$country_help <- 
+  ifelse(Wahlstrom_2017_zu_2019$country_name == "Scotland", "Schottland", "Rest UK")
+Wahlstrom_2017_zu_2019$country_help <- 
+  as.factor(Wahlstrom_2017_zu_2019$country_help)
+Wahlstrom_2017_zu_2019$country_help <- 
+  factor(Wahlstrom_2017_zu_2019$country_help, 
+         levels = rev(levels(Wahlstrom_2017_zu_2019$country_help)))
+plot_nobrexit1719 <- ggplot(data = Wahlstrom_2017_zu_2019, 
+       aes(x = Figure.to.use, y = change_votes_1)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung No-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil No Brexit von 2017 bis 2019")
+Modell.Wahlstrom.2017.2019.votes.2 <- 
+  lm(data = Wahlstrom_2017_zu_2019, change_votes_2 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2017.2019.votes.2)
+plot_softbrexit1719 <- ggplot(data = Wahlstrom_2017_zu_2019, 
+       aes(x = Figure.to.use, y = change_votes_2)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung Soft-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Soft Brexit von 2017 bis 2019")
+Modell.Wahlstrom.2017.2019.votes.3 <- 
+  lm(data = Wahlstrom_2017_zu_2019, change_votes_3 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2017.2019.votes.3)
+plot_hardbrexit1719 <- ggplot(data = Wahlstrom_2017_zu_2019, 
+       aes(x = Figure.to.use, y = change_votes_3)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.125, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung Hard-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Hard-Brexit in Zusammenhang \nmit Leave-Stimmenanteil (2017-2019)")
+```
+
+```{r Auswirkungen von Brexit-Wahl zwischen 2015 zu 2019, include=FALSE}
+#Betrachte Einfluss von Brexitwahl auf Wahlverhalten zwischen 2015&2019
+Modell.Wahlstrom.2015.2019.votes.1 <- 
+  lm(data = Wahlstrom_2015_zu_2019, change_votes_1 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2019.votes.1)
+Wahlstrom_2015_zu_2019$country_help <- 
+  ifelse(Wahlstrom_2015_zu_2019$Country == "Scotland", "Schottland", "Rest UK")
+Wahlstrom_2015_zu_2019$country_help <- 
+  as.factor(Wahlstrom_2015_zu_2019$country_help)
+Wahlstrom_2015_zu_2019$country_help <- 
+  factor(Wahlstrom_2015_zu_2019$country_help, 
+         levels = rev(levels(Wahlstrom_2015_zu_2019$country_help)))
+plot_nobrexit1519 <- ggplot(data = Wahlstrom_2015_zu_2019, 
+       aes(x = Figure.to.use, y = change_votes_1)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung No-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil No Brexit von 2015 bis 2019")
+Modell.Wahlstrom.2015.2019.votes.2 <- 
+  lm(data = Wahlstrom_2015_zu_2019, change_votes_2 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2019.votes.2)
+plot_softbrexit1519 <- ggplot(data = Wahlstrom_2015_zu_2019, 
+       aes(x = Figure.to.use, y = change_votes_2)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung Soft-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Soft Brexit von 2015 bis 2019")
+Modell.Wahlstrom.2015.2019.votes.3 <- 
+  lm(data = Wahlstrom_2015_zu_2019, change_votes_3 ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2019.votes.3)
+plot_hardbrexit1519 <- ggplot(data = Wahlstrom_2015_zu_2019, 
+       aes(x = Figure.to.use, y = change_votes_3)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point(aes(color = as.factor(country_help))) +
+  scale_color_manual(values = c("red", "black")) +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  theme(legend.position = c(0.125, 0.94), legend.title = element_blank(), 
+        legend.text = element_text(size = 15)) +
+  labs(y = "Stimmenanteilsänderung Hard-Brexit", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Hard-Brexit in Zusammenhang \nmit Leave-Stimmenanteil (2015-2019)")
+```
+
+```{r Karte 2015 zu 2017, echo=FALSE, include=FALSE}
+#Zeige auf Map, wo sich Stimmenanteile wie geändert haben zwischen 2015&2017
+Wahlstrom_2015_zu_2017_map <- Wahlstrom_2015_zu_2017
+colnames(Wahlstrom_2015_zu_2017_map) [2] <- "id"
+mapdata_2015_zu_2017 <- mapdata
+mapdata_2015_zu_2017$id <- gsub(" and ", " & ", mapdata_2015_zu_2017$id)
+mapdata_2015_zu_2017$id <- gsub(", ", " ", mapdata_2015_zu_2017$id)
+Wahlstrom_2015_zu_2017_map$id <- gsub(", ", " ", Wahlstrom_2015_zu_2017_map$id)
+mapdata_2015_zu_2017$id <- str_to_title(mapdata_2015_zu_2017$id)
+mapdata_2015_zu_2017$id <- 
+  sub("North (.*)", "\\1 North", mapdata_2015_zu_2017$id)
+Wahlstrom_2015_zu_2017_map$id <- 
+  sub("North (.*)", "\\1 North", Wahlstrom_2015_zu_2017_map$id)
+mapdata_2015_zu_2017$id <- 
+  sub("South (.*)", "\\1 South", mapdata_2015_zu_2017$id)
+Wahlstrom_2015_zu_2017_map$id <- 
+  sub("South (.*)", "\\1 South", Wahlstrom_2015_zu_2017_map$id)
+mapdata_2015_zu_2017$id <- 
+  sub("East (.*)", "\\1 East", mapdata_2015_zu_2017$id)
+Wahlstrom_2015_zu_2017_map$id <- 
+  sub("East (.*)", "\\1 East", Wahlstrom_2015_zu_2017_map$id)
+mapdata_2015_zu_2017$id <- 
+  sub("West (.*)", "\\1 West", mapdata_2015_zu_2017$id)
+Wahlstrom_2015_zu_2017_map$id <- 
+  sub("West (.*)", "\\1 West", Wahlstrom_2015_zu_2017_map$id)
+mapdata_2015_zu_2017$id <- 
+  sub("Mid (.*)", "\\1 Mid", mapdata_2015_zu_2017$id)
+Wahlstrom_2015_zu_2017_map$id <- 
+  sub("Mid (.*)", "\\1 Mid", Wahlstrom_2015_zu_2017_map$id)
+mapdata_2015_zu_2017$id <- 
+  sub("Central (.*)", "\\1 Central", mapdata_2015_zu_2017$id)
+Wahlstrom_2015_zu_2017_map$id <- 
+  sub("Central (.*)", "\\1 Central", Wahlstrom_2015_zu_2017_map$id)
+Wahlstrom_2015_zu_2017_map$id <- 
+  sub("^(.*) City Of", "City Of \\1", Wahlstrom_2015_zu_2017_map$id)
+mapdata_2015_zu_2017$id <- 
+  gsub("Kingston Upon Hull", "Hull", mapdata_2015_zu_2017$id)
+mapdata_2015_zu_2017$id <- 
+  gsub("Ashton-Under-Lyne", "Ashton Under Lyne", mapdata_2015_zu_2017$id)
+mapdata_2015_zu_2017$id <- 
+  gsub("The Cotswolds", "Cotswolds The", mapdata_2015_zu_2017$id)
+mapdata_2015_zu_2017$id <- 
+  gsub("The Wrekin", "Wrekin The", mapdata_2015_zu_2017$id)
+mapdata_2015_zu_2017$id <- 
+  gsub("Torridge & Devon West", "Devon & Torridge West", 
+       mapdata_2015_zu_2017$id)
+Wahlstrom_2015_zu_2017_map[
+  Wahlstrom_2015_zu_2017_map$change_votes_1 < -0.271, ]$change_votes_1 <- -0.271
+df_help <- join(mapdata_2015_zu_2017, Wahlstrom_2015_zu_2017_map, by = "id")
+ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = Figure.to.use), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  theme(legend.position = c(0.02, 0.72), legend.justification = c(0, 1), 
+        legend.text = element_text(size = 10))
+map_nobrexit1517 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_votes_1), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size = 10)) +
+  ggtitle("No-Brexit 2015-2017")
+map_softbrexit1517 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_votes_2), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size = 10)) +
+  ggtitle("Soft-Brexit 2015-2017")
+map_hardbrexit1517 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_votes_3), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size = 10)) +
+  ggtitle("Hard-Brexit 2015-2017")
+```
+
+```{r Karte 2017 zu 2019, echo=FALSE, include=FALSE}
+#Zeige auf Map, wo sich Stimmenanteile wie geändert haben zwischen 2017&2019
+Wahlstrom_2017_zu_2019_map <- Wahlstrom_2017_zu_2019
+colnames(Wahlstrom_2017_zu_2019_map) [2] <- "id"
+mapdata_2017_zu_2019 <- mapdata
+mapdata_2017_zu_2019$id <- 
+  sub("(.*)-under-(.*)", "\\1-Under-\\2", mapdata_2017_zu_2019$id)
+mapdata_2017_zu_2019$id <- 
+  sub("(.*)-upon-(.*)", "\\1-Upon-\\2", mapdata_2017_zu_2019$id)
+mapdata_2017_zu_2019$id <- 
+  sub("Newcastle upon(.*)", "Newcastle Upon\\1", mapdata_2017_zu_2019$id)
+mapdata_2017_zu_2019$id <- 
+  sub("(.*)-on-(.*)", "\\1-On-\\2", mapdata_2017_zu_2019$id)
+mapdata_2017_zu_2019$id <- 
+  sub("(.*) of (.*)", "\\1 Of \\2", mapdata_2017_zu_2019$id)
+mapdata_2017_zu_2019$id <- 
+  sub("(.*) an (.*)", "\\1 An \\2", mapdata_2017_zu_2019$id)
+df_help <- join(mapdata_2017_zu_2019, Wahlstrom_2017_zu_2019_map, by = "id")
+ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = Figure.to.use), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank())
+map_nobrexit1719 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_votes_1), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  #Legende in die leere Fläche oben links im Panel (neben Schottland)
+  #setzen, mit Verankerung an der oberen linken Ecke der Legende.
+  theme(legend.position = c(0.02, 0.72), legend.justification = c(0, 1), 
+        legend.text = element_text(size = 10)) +
+  ggtitle("No-Brexit 2017-2019")
+map_softbrexit1719 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_votes_2), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  #Legende in die leere Fläche oben links im Panel (neben Schottland)
+  #setzen, mit Verankerung an der oberen linken Ecke der Legende.
+  theme(legend.position = c(0.02, 0.72), legend.justification = c(0, 1), 
+        legend.text = element_text(size = 10)) +
+  ggtitle("Soft-Brexit 2017-2019")
+map_hardbrexit1719 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_votes_3), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  #Legende in die leere Fläche oben links im Panel (neben Schottland)
+  #setzen, mit Verankerung an der oberen linken Ecke der Legende.
+  theme(legend.position = c(0.02, 0.72), legend.justification = c(0, 1), 
+        legend.text = element_text(size = 10)) +
+  ggtitle("Hard-Brexit 2017-2019")
+```
+
+```{r Karte 2015 zu 2019, echo=FALSE, include=FALSE}
+#Zeige auf Map, wo sich Stimmenanteile wie geändert haben zwischen 2015&2019
+Wahlstrom_2015_zu_2019_map <- Wahlstrom_2015_zu_2019
+colnames(Wahlstrom_2015_zu_2019_map) [2] <- "id"
+mapdata_2015_zu_2019 <- mapdata
+mapdata_2015_zu_2019$id <- gsub(" and ", " & ", mapdata_2015_zu_2019$id)
+mapdata_2015_zu_2019$id <- gsub(", ", " ", mapdata_2015_zu_2019$id)
+Wahlstrom_2015_zu_2019_map$id <- gsub(", ", " ", Wahlstrom_2015_zu_2019_map$id)
+mapdata_2015_zu_2019$id <- str_to_title(mapdata_2015_zu_2019$id)
+mapdata_2015_zu_2019$id <- 
+  sub("North (.*)", "\\1 North", mapdata_2015_zu_2019$id)
+Wahlstrom_2015_zu_2019_map$id <- 
+  sub("North (.*)", "\\1 North", Wahlstrom_2015_zu_2019_map$id)
+mapdata_2015_zu_2019$id <- 
+  sub("South (.*)", "\\1 South", mapdata_2015_zu_2019$id)
+Wahlstrom_2015_zu_2019_map$id <- 
+  sub("South (.*)", "\\1 South", Wahlstrom_2015_zu_2019_map$id)
+mapdata_2015_zu_2019$id <- 
+  sub("East (.*)", "\\1 East", mapdata_2015_zu_2019$id)
+Wahlstrom_2015_zu_2019_map$id <- 
+  sub("East (.*)", "\\1 East", Wahlstrom_2015_zu_2019_map$id)
+mapdata_2015_zu_2019$id <- 
+  sub("West (.*)", "\\1 West", mapdata_2015_zu_2019$id)
+Wahlstrom_2015_zu_2019_map$id <- 
+  sub("West (.*)", "\\1 West", Wahlstrom_2015_zu_2019_map$id)
+mapdata_2015_zu_2019$id <- 
+  sub("Mid (.*)", "\\1 Mid", mapdata_2015_zu_2019$id)
+Wahlstrom_2015_zu_2019_map$id <- 
+  sub("Mid (.*)", "\\1 Mid", Wahlstrom_2015_zu_2019_map$id)
+mapdata_2015_zu_2019$id <- 
+  sub("Central (.*)", "\\1 Central", mapdata_2015_zu_2019$id)
+Wahlstrom_2015_zu_2019_map$id <- 
+  sub("Central (.*)", "\\1 Central", Wahlstrom_2015_zu_2019_map$id)
+Wahlstrom_2015_zu_2019_map$id <- 
+  sub("^(.*) City Of", "City Of \\1", Wahlstrom_2015_zu_2019_map$id)
+mapdata_2015_zu_2019$id <- 
+  gsub("Kingston Upon Hull", "Hull", mapdata_2015_zu_2019$id)
+mapdata_2015_zu_2019$id <- 
+  gsub("Ashton-Under-Lyne", "Ashton Under Lyne", mapdata_2015_zu_2019$id)
+mapdata_2015_zu_2019$id <- 
+  gsub("The Cotswolds", "Cotswolds The", mapdata_2015_zu_2019$id)
+mapdata_2015_zu_2019$id <- 
+  gsub("The Wrekin", "Wrekin The", mapdata_2015_zu_2019$id)
+mapdata_2015_zu_2019$id <- 
+  gsub("Torridge & Devon West", "Devon & Torridge West", 
+       mapdata_2015_zu_2019$id)
+df_help <- join(mapdata_2015_zu_2019, Wahlstrom_2015_zu_2019_map, by = "id")
+ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = Figure.to.use), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358)) +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank())
+map_nobrexit1519 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_votes_1), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358)) +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size = 10))+
+  ggtitle("No-Brexit 2015-2019")
+map_softbrexit1519 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_votes_2), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358)) +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size = 10))+
+  ggtitle("Soft-Brexit 2015-2019")
+map_hardbrexit1519 <- ggplot() + 
+  geom_polygon(data = df_help, aes(x = long, y = lat, group = group, fill = change_votes_3), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  theme(legend.position = "none", legend.text = element_text(size = 10))+
+  ggtitle("Hard-Brexit 2015-2019")
+```
+### 4.3 Zusammenhang EU-Referendum und Parlamentswahlen
+
+
+```{r Hard.Brexit Karte 1519, echo=FALSE}
+grid.arrange(map_hardbrexit1517, map_hardbrexit1719, map_hardbrexit1519, 
+             nrow = 1, ncol = 3, top = "Stimmenanteilsänderung")
+```
+
+Die drei nebeneinanderstehenden Karten zeigen die Veränderung des Hard-Brexit-Stimmenanteils für die Zeiträume 2015-2017, 2017-2019 und 2015-2019. Grüntöne markieren eine Zunahme, Violetttöne eine Abnahme des Stimmenanteils. Im ersten Zeitraum fällt vor allem Schottland durch eine deutliche Zunahme (Grün) auf, während England und Wales überwiegend Rückgänge verzeichnen. Im zweiten Zeitraum kehrt sich das Bild teilweise um, sodass die Gesamtveränderung 2015-2019 in der rechten Karte beide Effekte bündelt und den langfristigen Trend abbildet.
+
+```{r Hard.Brexit plot 1517, echo=FALSE, warning=FALSE}
+plot_hardbrexit1517
+```
+
+Pearson (Rest UK): 0,2098
+Pearson (Schottland): 0,3880
+Die Entwicklung des Stimmenanteils Hard-Brexit wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2015-2017 untersucht.
+In Schottland ist mit einem Bravais-Pearson-Korrelationskoeffizienten von 0,3880 eine moderate positive Korrelation zu erkennen. In Schottland ist eine Zunahme des Hard-Brexit-Stimmenanteils zu erkennen, entgegen dem Trend im restlichen UK.
+
+
+```{r Hard.Brexit plot 1719, echo=FALSE, warning=FALSE}
+plot_hardbrexit1719
+```
+
+Pearson (Gesamtes UK): 0,5906
+Pearson (UK ohne Schottland): 0,5487
+Pearson (Schottland): 0,4136
+Die Entwicklung des Stimmenanteils Hard-Brexit wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2017-2019 untersucht.
+Im gesamten vereinigten Königreich ist mit einem Bravais-Pearson-Korrelationskoeffizienten von 0,5906 eine stark positive Korrelation zu erkennen. Insbesondere in Küstenregionen von Wales und England gibt es eine Zunahme des Hard-Brexit-Stimmenanteils.
+Betrachtet man die Veränderung geographisch, so zeigt sich ein deutliches Nord-Süd-Gefälle. In Schottland fällt die Zunahme des Hard-Brexit-Stimmenanteils im ländlichen Binnenland am stärksten aus (die kräftigsten Grüntöne), während die urbanen Zentren an der Küste - allen voran der Großraum Edinburgh - verhaltener ausfallen. In England und Wales konzentriert sich die Zunahme ebenfalls auf die Küstenregionen, wohingegen die Ballungsräume im Landesinneren eher gleichbleibende oder rückläufige Anteile aufweisen. Die Karte legt damit nahe, dass sich die Hard-Brexit-Dynamik vor allem abseits der großen Städte verstärkt hat.
+
+```{r Hard.Brexit plot 1519, echo=FALSE, warning=FALSE}
+plot_hardbrexit1519
+```
+Pearson (Gesamtes UK): 0,2178
+Pearson (UK ohne Schottland): 0,4959
+Pearson (Schottland): 0,5300
+Die Entwicklung des Stimmenanteils Hard-Brexit wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2015-2019 untersucht.
+In Schottland ist mit einem Bravais-Pearson-Korrelationskoeffizienten von 0,5300 eine starke positive Korrelation zu erkennen. In der gesamten UK besteht lediglich eine schwache Korrelation.
+
+```{r Soft.Brexit Karte 1519, echo=FALSE}
+grid.arrange(map_softbrexit1517, map_softbrexit1719, map_softbrexit1519,
+             nrow = 1, ncol = 3)
+```
+
+Analog zeigen die drei nebeneinanderstehenden Karten die Veränderung des Soft-Brexit-Stimmenanteils für die Zeiträume 2015-2017, 2017-2019 und 2015-2019. Grüntöne markieren eine Zunahme, Violetttöne eine Abnahme des Stimmenanteils. Im ersten Zeitraum überwiegt in weiten Teilen Englands und Wales eine flächige Zunahme (Grün), während Schottland eher unverändert bleibt. Im zweiten Zeitraum kehrt sich das Muster nahezu vollständig um, sodass England und Wales großflächig von Rückgängen (Violett) geprägt sind. In der Gesamtveränderung 2015-2019 heben sich die beiden gegenläufigen Phasen weitgehend auf, weshalb die rechte Karte überwiegend blasse, nahe null liegende Werte zeigt und nur vereinzelt stärkere Ausschläge erkennen lässt.
+
+```{r Soft.Brexit plot 1517, echo=FALSE, warning=FALSE}
+plot_softbrexit1517
+```
+
+Die Stimmenentwicklungen des No-Brexit sowie des Soft-Brexit werden graphisch visualisiert. Der betrachtete Zeitraum ist analog 2015-2019. In den ersten beiden Jahren haben die No-Brexit-Stimmen abgenommen und die Soft-Brexit-Stimmen zugenommen. In den letzten beiden Jahren ist die Beobachtung umgekehrt. No-Brexit-Stimmen haben zugenommen, während Soft-Brexit-Stimmen abgenommen haben.
+
+```{r Soft.Brexit plot 1719, echo=FALSE, warning=FALSE}
+plot_softbrexit1719
+```
+Pearson (gesamtes UK): -0,0638
+Die Entwicklung des Stimmenanteils No-Brexit wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2015-2019 untersucht.
+Im gesamten Großbritannien ist mit einem Bravais-Pearson-Korrelationskoeffizienten von -0,0638 keine Korrelation zu erkennen. 
+
+```{r Soft.Brexit plot 1519, echo=FALSE, warning=FALSE}
+plot_softbrexit1519
+```
+Pearson (gesamtes UK): -0,2303
+Die Entwicklung des Stimmenanteils Soft-Brexit wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2015-2019 untersucht.
+In gesamten Großbritannien ist mit einem Bravais-Pearson-Korrelationskoeffizienten von -0,2303 eine schwache negative Korrelation zu erkennen.
+
+```{r No.Brexit Karte 1519, echo=FALSE}
+grid.arrange(map_nobrexit1517, map_nobrexit1719, map_nobrexit1519,
+             nrow = 1, ncol = 3)
+```
+
+Ebenso zeigen die drei nebeneinanderstehenden Karten die Veränderung des No-Brexit-Stimmenanteils für die Zeiträume 2015-2017, 2017-2019 und 2015-2019. Grüntöne markieren eine Zunahme, Violetttöne eine Abnahme des Stimmenanteils. Im ersten Zeitraum sticht Schottland durch eine deutliche Abnahme (kräftiges Violett) hervor, während der Rest des Landes weitgehend unverändert bleibt. Im zweiten Zeitraum dreht sich das Bild, denn nun verzeichnen sowohl Schottland als auch große Teile Englands eine breite Zunahme (Grün). Die Gesamtveränderung 2015-2019 fasst beide Phasen zusammen und zeigt für England überwiegend leichte Zugewinne, während Schottland durch das gegenläufige Auf und Ab per Saldo nur schwach ausschlägt.
+
+```{r No.Brexit plot 1517, echo=FALSE, warning=FALSE}
+plot_nobrexit1517
+```
+
+Die Entwicklung des Stimmenanteils No-Brexit wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2015-2017 untersucht. Die rot markierten schottischen Wahlkreise liegen fast ausnahmslos deutlich unterhalb der grünen Nulllinie und ballen sich im unteren mittleren Bereich des Diagramms. Schottland verzeichnet in dieser Phase also durchgehend Verluste beim No-Brexit-Stimmenanteil, und zwar weitgehend unabhängig vom geschätzten Leave-Anteil. Die schwarzen Wahlkreise des übrigen UK streuen hingegen eng um die Nulllinie, sodass sich dort kaum Veränderungen zeigen.
+
+```{r No.Brexit plot 1719, echo=FALSE, warning=FALSE}
+plot_nobrexit1719
+```
+
+Für den Zeitraum von 2017-2019 kehrt sich das Bild um. Die rot markierten schottischen Wahlkreise liegen nun überwiegend oberhalb der Nulllinie im oberen linken Bereich des Diagramms, verzeichnen also klare Zugewinne beim No-Brexit-Stimmenanteil. Auch die schwarzen Wahlkreise des übrigen UK verschieben sich leicht nach oben, wobei die Zunahme tendenziell bei niedrigem geschätztem Leave-Anteil am größten ausfällt und mit steigendem Leave-Anteil abnimmt.
+
+
+```{r No.Brexit plot 1519, echo=FALSE, warning=FALSE}
+plot_nobrexit1519
+```
+Pearson (gesamtes UK): -0,0638
+Die Entwicklung des Stimmenanteils No-Brexit wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2015-2019 untersucht.
+Im gesamten Großbritannien ist mit einem Bravais-Pearson-Korrelationskoeffizienten von -0,0638 keine Korrelation zu erkennen. 
+
+
+```{r Labour Modell, echo=FALSE, warning=FALSE}
+#formatiere Daten der Wahlergebnisse auf Labour Partei
+GE2015_Labour <- GE2015_constituency_results[1:650, c(5, 2:4, 8:9, 69, 70)]
+GE2015_Labour[is.na(GE2015_Labour)] <- 0
+GE2015_Labour$Electorate <- 
+  as.numeric(sub(",", "", GE2015_Labour$Electorate, fixed = TRUE))
+GE2015_Labour$Total.number.of.valid.votes.counted <- 
+  as.numeric(sub(",", "", GE2015_Labour$Total.number.of.valid.votes.counted, 
+                 fixed = TRUE))
+GE2015_Labour$Lab <- 
+  (GE2015_Labour$Lab + GE2015_Labour$Lab.Co.op) / 
+  GE2015_Labour$Total.number.of.valid.votes.counted
+GE2017_Labour <- GE2017_constituency_result[ , c(1, 3, 5:6, 12:13, 17)]
+GE2017_Labour[is.na(GE2017_Labour)] <- 0
+GE2017_Labour$electorate <- 
+  as.numeric(sub(",", "", GE2017_Labour$electorate, fixed = TRUE))
+GE2017_Labour$valid_votes <- 
+  as.numeric(sub(",", "", GE2017_Labour$valid_votes, fixed = TRUE))
+GE2017_Labour$lab <- GE2017_Labour$lab / GE2017_Labour$valid_votes
+GE2019_Labour <- GE2019_constituency_result[ , c(1, 3, 5:6, 15:16, 20)]
+GE2019_Labour[is.na(GE2019_Labour)] <- 0
+GE2019_Labour$electorate <- 
+  as.numeric(sub(",", "", GE2019_Labour$electorate, fixed = TRUE))
+GE2019_Labour$valid_votes <- 
+  as.numeric(sub(",", "", GE2019_Labour$valid_votes, fixed = TRUE))
+GE2019_Labour$lab <- GE2019_Labour$lab / GE2019_Labour$valid_votes
+GE2015_Labour_Einflussgroessen <- 
+  join(GE2015_Labour, population_by_age_2015, by = "Constituency.ID")
+GE2015_Labour_Einflussgroessen <- 
+  join(GE2015_Labour_Einflussgroessen, GE2015_auslaenderq, 
+       by = "Constituency.ID")
+GE2015_Labour_Einflussgroessen <- 
+  join(GE2015_Labour_Einflussgroessen, density_2015, by = "Constituency.ID")
+GE2015_Labour_Einflussgroessen <- 
+  join(GE2015_Labour_Einflussgroessen, GE2015_economy, 
+       by = "Constituency.ID")
+GE2015_Labour_Einflussgroessen <- 
+  GE2015_Labour_Einflussgroessen[ , c(1:7, 10, 102, 112, 115, 116, 118:119, 131)]
+colnames(GE2015_Labour_Einflussgroessen) [ncol(GE2015_Labour_Einflussgroessen)] <- 
+  "GDP per head"
+colnames(population_by_age_2017) [1] <- "Constituency.ID"
+colnames(density_2017) [3] <- "Constituency.ID"
+colnames(GE2017_Labour) [1] <- "Constituency.ID"
+colnames(GE2017_economy) [1] <- "Constituency.ID"
+GE2017_Labour_Einflussgroessen <- 
+  join(GE2017_Labour, population_by_age_2017, by = "Constituency.ID")
+GE2017_Labour_Einflussgroessen <- 
+  join(GE2017_Labour_Einflussgroessen, GE2017_auslaenderq, by = "Constituency.ID")
+GE2017_Labour_Einflussgroessen <- 
+  join(GE2017_Labour_Einflussgroessen, density_2017, by = "Constituency.ID")
+GE2017_Labour_Einflussgroessen <- 
+  join(GE2017_Labour_Einflussgroessen, GE2017_economy, by = "Constituency.ID")
+GE2017_Labour_Einflussgroessen <- 
+  GE2017_Labour_Einflussgroessen[ , c(1:7, 9, 101, 111, 114, 115, 117:118, 130)]
+colnames(GE2017_Labour_Einflussgroessen) [ncol(GE2017_Labour_Einflussgroessen)] <- 
+  "GDP per head"
+colnames(population_by_age_2019) [1] <- "Constituency.ID"
+colnames(density_2019) [4] <- "Constituency.ID"
+colnames(GE2019_Labour) [1] <- "Constituency.ID"
+colnames(GE2019_economy) [1] <- "Constituency.ID"
+GE2019_Labour_Einflussgroessen <- 
+  join(GE2019_Labour, density_2019, by = "Constituency.ID")
+GE2019_Labour_Einflussgroessen <- 
+  join(GE2019_Labour_Einflussgroessen, population_by_age_2019, 
+       by = "Constituency.ID")
+GE2019_Labour_Einflussgroessen <- 
+  join(GE2019_Labour_Einflussgroessen, GE2019_auslaenderq, 
+       by = "Constituency.ID")
+GE2019_Labour_Einflussgroessen <- 
+  join(GE2019_Labour_Einflussgroessen, GE2019_economy, by = "Constituency.ID")
+GE2019_Labour_Einflussgroessen <- 
+  GE2019_Labour_Einflussgroessen[ , c(1:7, 13, 105, 115, 118, 119, 10, 11, 131)]
+colnames(GE2019_Labour_Einflussgroessen) [ncol(GE2019_Labour_Einflussgroessen)] <- 
+  "GDP per head"
+total.model.2015.lab <- 
+  lm(data = GE2015_Labour_Einflussgroessen, 
+     Lab ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2015_Labour_Einflussgroessen$Lab_ber <- total.model.2015.lab$res
+total.model.2017.lab <- 
+  lm(data = GE2017_Labour_Einflussgroessen, 
+     lab ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2017_Labour_Einflussgroessen$lab_ber <- total.model.2017.lab$res
+total.model.2019.lab <- 
+  lm(data = GE2019_Labour_Einflussgroessen, 
+     lab ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2019_Labour_Einflussgroessen$lab_ber <- total.model.2019.lab$res
+Wahlstrom_2015_zu_2017_lab <- 
+  join(GE2015_Labour_Einflussgroessen, GE2017_Labour_Einflussgroessen, 
+       by = "Constituency.ID")
+colnames(Wahlstrom_2015_zu_2017_lab) [22] <- c("17_lab")
+colnames(Wahlstrom_2015_zu_2017_lab) [31] <- c("17_lab_ber")
+Wahlstrom_2015_zu_2017_lab$change_lab <- 
+  Wahlstrom_2015_zu_2017_lab$`17_lab` - Wahlstrom_2015_zu_2017_lab$Lab
+Wahlstrom_2015_zu_2017_lab <- 
+  join(Wahlstrom_2015_zu_2017_lab, BREXIT_2016_Einflussgroessen, 
+       by = "Constituency.ID")
+Wahlstrom_2015_zu_2017_lab <- 
+  Wahlstrom_2015_zu_2017_lab[ , c(1:32, 34:37, 39, 46)]
+Wahlstrom_2017_zu_2019_lab <- 
+  join(GE2017_Labour_Einflussgroessen, GE2019_Labour_Einflussgroessen, 
+       by = "Constituency.ID")
+colnames(Wahlstrom_2017_zu_2019_lab) [22] <- c("19_lab")
+colnames(Wahlstrom_2017_zu_2019_lab) [31] <- c("19_lab_ber")
+Wahlstrom_2017_zu_2019_lab$change_lab <- 
+  Wahlstrom_2017_zu_2019_lab$`19_lab` - Wahlstrom_2017_zu_2019_lab$lab
+Wahlstrom_2017_zu_2019_lab <- 
+  join(Wahlstrom_2017_zu_2019_lab, BREXIT_2016_Einflussgroessen, 
+       by = "Constituency.ID")
+Wahlstrom_2017_zu_2019_lab <- 
+  Wahlstrom_2017_zu_2019_lab[ , c(1:32, 34:37, 39, 46)]
+Wahlstrom_2017_zu_2019_lab[
+  Wahlstrom_2017_zu_2019_lab$constituency_name == "Chorley", ]$change_lab <- NA
+Wahlstrom_2017_zu_2019_lab[
+  Wahlstrom_2017_zu_2019_lab$constituency_name == "Buckingham", ]$change_lab <- NA
+Wahlstrom_2015_zu_2019_lab <- 
+  join(GE2015_Labour_Einflussgroessen, GE2019_Labour_Einflussgroessen, 
+       by = "Constituency.ID")
+colnames(Wahlstrom_2015_zu_2019_lab) [22] <- c("19_lab")
+colnames(Wahlstrom_2015_zu_2019_lab) [31] <- c("19_lab_ber")
+Wahlstrom_2015_zu_2019_lab$change_lab <- 
+  Wahlstrom_2015_zu_2019_lab$`19_lab` - Wahlstrom_2015_zu_2019_lab$Lab
+Wahlstrom_2015_zu_2019_lab <- 
+  join(Wahlstrom_2015_zu_2019_lab, BREXIT_2016_Einflussgroessen, 
+       by = "Constituency.ID")
+Wahlstrom_2015_zu_2019_lab <- 
+  Wahlstrom_2015_zu_2019_lab[ , c(1:32, 34:37, 39, 46)]
+Wahlstrom_2015_zu_2019_lab[
+  Wahlstrom_2015_zu_2019_lab$constituency_name == "Chorley", ]$change_lab <- NA
+Wahlstrom_2015_zu_2019_lab[
+  Wahlstrom_2015_zu_2019_lab$constituency_name == "Buckingham", ]$change_lab <- NA
+```
+
+```{r Labour Einfluss, Grafiken und Karten, echo=FALSE, warning=FALSE, include=FALSE}
+#Erstelle lineares Regressionsmodell der Stimmenanteiländerung der Labourpartei in 
+#Abhängigkeit von Referendumsergebnissen der Schätzung und zeige Wahlströme 
+#zwischen den Jahren.
+Modell.Wahlstrom.2015.2017.lab <- 
+  lm(data = Wahlstrom_2015_zu_2017_lab, change_lab ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2017.lab)
+Wahlstrom_2015_zu_2017_lab$country_help <- 
+  ifelse(Wahlstrom_2015_zu_2017_lab$Country == "Scotland", 
+         "Schottland", "Rest UK")
+Wahlstrom_2015_zu_2017_lab$country_help <- 
+  as.factor(Wahlstrom_2015_zu_2017_lab$country_help)
+Wahlstrom_2015_zu_2017_lab$country_help <- 
+  factor(Wahlstrom_2015_zu_2017_lab$country_help, 
+         levels = rev(levels(Wahlstrom_2015_zu_2017_lab$country_help)))
+ggplot(data = Wahlstrom_2015_zu_2017_lab, 
+       aes(x = Figure.to.use, y = change_lab)) +
+  geom_point() +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  labs(y = "Stimmenanteilsänderung Labour", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Labour von 2015 bis 2017") +
+  theme(legend.text = element_text(size = 15))
+# ggplot(data = Wahlstrom_2015_zu_2017_lab, 
+#        aes(x = Figure.to.use, y = change_lab)) +
+#   geom_point(aes(color = as.factor(country_help))) +
+#   scale_color_manual(values = c("red", "black")) +
+#   coord_cartesian(ylim = c(-0.3, 0.4)) +
+#   theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+#         legend.text = element_text(size = 15)) +
+#   labs(y = "Stimmenanteilsänderung Labour", 
+#        x = "Geschätzter Leave-Stimmenanteil", 
+#        title = "Entwicklung Stimmenanteil Labour von 2015 bis 2017")
+Modell.Wahlstrom.2017.2019.lab <- 
+  lm(data = Wahlstrom_2017_zu_2019_lab, change_lab ~ Figure.to.use)
+summary(Modell.Wahlstrom.2017.2019.lab)
+Wahlstrom_2017_zu_2019_lab$country_help <- 
+  ifelse(Wahlstrom_2017_zu_2019_lab$country_name == "Scotland", 
+         "Schottland", "Rest UK")
+Wahlstrom_2017_zu_2019_lab$country_help <- 
+  as.factor(Wahlstrom_2017_zu_2019_lab$country_help)
+Wahlstrom_2017_zu_2019_lab$country_help <- 
+  factor(Wahlstrom_2017_zu_2019_lab$country_help, 
+         levels = rev(levels(Wahlstrom_2017_zu_2019_lab$country_help)))
+ggplot(data = Wahlstrom_2017_zu_2019_lab, 
+       aes(x = Figure.to.use, y = change_lab)) +
+  geom_point() +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  labs(y = "Stimmenanteilsänderung Labour", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Labour von 2017 bis 2019") +
+  theme(legend.text = element_text(size = 15))
+# ggplot(data = Wahlstrom_2017_zu_2019_lab, 
+#        aes(x = Figure.to.use, y = change_lab)) +
+#   geom_point(aes(color = as.factor(country_help))) +
+#   scale_color_manual(values = c("red", "black")) +
+#   coord_cartesian(ylim = c(-0.3, 0.4)) +
+#   theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+#         legend.text = element_text(size = 15)) +
+#   labs(y = "Stimmenanteilsänderung Labour", 
+#        x = "Geschätzter Leave-Stimmenanteil", 
+#        title = "Entwicklung Stimmenanteil Labour von 2017 bis 2019")
+Modell.Wahlstrom.2015.2019.lab <- 
+  lm(data = Wahlstrom_2015_zu_2019_lab, change_lab ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2019.lab)
+Wahlstrom_2015_zu_2019_lab$country_help <- 
+  ifelse(Wahlstrom_2015_zu_2019_lab$Country == "Scotland", 
+         "Schottland", "Rest UK")
+Wahlstrom_2015_zu_2019_lab$country_help <- 
+  as.factor(Wahlstrom_2015_zu_2019_lab$country_help)
+Wahlstrom_2015_zu_2019_lab$country_help <- 
+  factor(Wahlstrom_2015_zu_2019_lab$country_help, 
+         levels = rev(levels(Wahlstrom_2015_zu_2019_lab$country_help)))
+plot_labour1519 <- ggplot(data = Wahlstrom_2015_zu_2019_lab, 
+       aes(x = Figure.to.use, y = change_lab)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 2) +
+  geom_point() +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  labs(y = "Stimmenanteilsänderung Labour", 
+       x = "Geschätzter Leave-Stimmenanteil",
+       #Kurzer, umgebrochener Titel, damit er im schmalen Panel eines
+       #2er-grid.arrange nicht rechts abgeschnitten wird.
+       title = "Labour vs.\nLeave-Anteil (2015-2019)") +
+  theme(legend.text = element_text(size = 15), 
+        plot.title = element_text(size = 11))
+# ggplot(data = Wahlstrom_2015_zu_2019_lab, 
+#        aes(x = Figure.to.use, y = change_lab)) +
+#   geom_point(aes(color = as.factor(country_help))) +
+#   scale_color_manual(values = c("red", "black")) +
+#   coord_cartesian(ylim = c(-0.3, 0.4)) +
+#   theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+#         legend.text = element_text(size = 15)) +
+#   labs(y = "Stimmenanteilsänderung Labour", 
+#        x = "Geschätzter Leave-Stimmenanteil", 
+#        title = "Entwicklung Stimmenanteil Labour von 2015 bis 2019")
+Wahlstrom_2015_zu_2017_lab_map <- Wahlstrom_2015_zu_2017_lab
+colnames(Wahlstrom_2015_zu_2017_lab_map) [2] <- "id"
+Wahlstrom_2015_zu_2017_lab_map$id <- 
+  gsub(", ", " ", Wahlstrom_2015_zu_2017_lab_map$id)
+Wahlstrom_2015_zu_2017_lab_map$id <- 
+  sub("North (.*)", "\\1 North", Wahlstrom_2015_zu_2017_lab_map$id)
+Wahlstrom_2015_zu_2017_lab_map$id <- 
+  sub("South (.*)", "\\1 South", Wahlstrom_2015_zu_2017_lab_map$id)
+Wahlstrom_2015_zu_2017_lab_map$id <- 
+  sub("East (.*)", "\\1 East", Wahlstrom_2015_zu_2017_lab_map$id)
+Wahlstrom_2015_zu_2017_lab_map$id <- 
+  sub("West (.*)", "\\1 West", Wahlstrom_2015_zu_2017_lab_map$id)
+Wahlstrom_2015_zu_2017_lab_map$id <- 
+  sub("Mid (.*)", "\\1 Mid", Wahlstrom_2015_zu_2017_lab_map$id)
+Wahlstrom_2015_zu_2017_lab_map$id <- 
+  sub("Central (.*)", "\\1 Central", Wahlstrom_2015_zu_2017_lab_map$id)
+Wahlstrom_2015_zu_2017_lab_map$id <- 
+  sub("^(.*) City Of", "City Of \\1", Wahlstrom_2015_zu_2017_lab_map$id)
+df_help <- join(mapdata_2015_zu_2017, Wahlstrom_2015_zu_2017_lab_map, by = "id")
+ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = Figure.to.use), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358)) +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank())
+ggplot() + geom_polygon(data = df_help, 
+                        aes(x = long, y = lat, group = group, 
+                            fill = change_lab), 
+                        color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank())
+Wahlstrom_2017_zu_2019_lab_map <- Wahlstrom_2017_zu_2019_lab
+colnames(Wahlstrom_2017_zu_2019_lab_map) [2] <- "id"
+df_help <- 
+  join(mapdata_2017_zu_2019, Wahlstrom_2017_zu_2019_lab_map, by = "id")
+ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_lab), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank())
+Wahlstrom_2015_zu_2019_lab_map <- Wahlstrom_2015_zu_2019_lab
+colnames(Wahlstrom_2015_zu_2019_lab_map) [2] <- "id"
+Wahlstrom_2015_zu_2019_lab_map$id <- 
+  gsub(", ", " ", Wahlstrom_2015_zu_2019_lab_map$id)
+Wahlstrom_2015_zu_2019_lab_map$id <- 
+  sub("North (.*)", "\\1 North", Wahlstrom_2015_zu_2019_lab_map$id)
+Wahlstrom_2015_zu_2019_lab_map$id <- 
+  sub("South (.*)", "\\1 South", Wahlstrom_2015_zu_2019_lab_map$id)
+Wahlstrom_2015_zu_2019_lab_map$id <- 
+  sub("East (.*)", "\\1 East", Wahlstrom_2015_zu_2019_lab_map$id)
+Wahlstrom_2015_zu_2019_lab_map$id <- 
+  sub("West (.*)", "\\1 West", Wahlstrom_2015_zu_2019_lab_map$id)
+Wahlstrom_2015_zu_2019_lab_map$id <- 
+  sub("Mid (.*)", "\\1 Mid", Wahlstrom_2015_zu_2019_lab_map$id)
+Wahlstrom_2015_zu_2019_lab_map$id <- 
+  sub("Central (.*)", "\\1 Central", Wahlstrom_2015_zu_2019_lab_map$id)
+Wahlstrom_2015_zu_2019_lab_map$id <- 
+  sub("^(.*) City Of", "City Of \\1", Wahlstrom_2015_zu_2019_lab_map$id)
+df_help <- join(mapdata_2015_zu_2019, Wahlstrom_2015_zu_2019_lab_map, by = "id")
+map_labour1519 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_lab), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Änderung", low = "#3C1361",
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  #rechtes Panel in einem 2er-grid.arrange: Legende in die leere Fläche
+  #oben links im Panel setzen (Verankerung an oberer linker Ecke).
+  theme(legend.position = c(0.02, 0.72), legend.justification = c(0, 1), 
+        legend.text = element_text(size = 10))
+```
+
+```{r Labour Karte und plot 1519, echo=FALSE, warning=FALSE}
+grid.arrange(plot_labour1519, map_labour1519, nrow = 1, ncol = 2)
+```
+Pearson (gesamtes UK): -0,2303
+Die Entwicklung des Stimmenanteils Labour wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2015-2019 untersucht.
+In gesamten Großbritannien ist mit einem Bravais-Pearson-Korrelationskoeffizienten von -0,2303 ähnlich wie oben eine schwache negative Korrelation zu erkennen.
+
+```{r Conservatives Modell, echo=FALSE}
+#formatiere Daten der Wahlergebnisse auf Conservatives Partei
+GE2015_Conservatives <- GE2015_constituency_results[1:650, c(5, 2:4, 8:9, 27)]
+GE2015_Conservatives[is.na(GE2015_Conservatives)] <- 0
+GE2015_Conservatives$Electorate <- 
+  as.numeric(sub(",", "", GE2015_Conservatives$Electorate, fixed = TRUE))
+GE2015_Conservatives$Total.number.of.valid.votes.counted <- 
+  as.numeric(sub(",", "", 
+                 GE2015_Conservatives$Total.number.of.valid.votes.counted, 
+                 fixed = TRUE))
+colnames(GE2015_Conservatives) [length(GE2015_Conservatives)] <- "Con"
+GE2015_Conservatives$Con <-
+  GE2015_Conservatives$Con /
+  GE2015_Conservatives$Total.number.of.valid.votes.counted
+GE2017_Conservatives <- GE2017_constituency_result[ , c(1, 3, 5:6, 12:13, 16)]
+GE2017_Conservatives[is.na(GE2017_Conservatives)] <- 0
+GE2017_Conservatives$electorate <- 
+  as.numeric(sub(",", "", GE2017_Conservatives$electorate, fixed = TRUE))
+GE2017_Conservatives$valid_votes <- 
+  as.numeric(sub(",", "", GE2017_Conservatives$valid_votes, fixed = TRUE))
+GE2017_Conservatives$con <- 
+  GE2017_Conservatives$con / GE2017_Conservatives$valid_votes
+GE2019_Conservatives <- GE2019_constituency_result[ , c(1, 3, 5:6, 15:16, 19)]
+GE2019_Conservatives[is.na(GE2019_Conservatives)] <- 0
+GE2019_Conservatives$electorate <- 
+  as.numeric(sub(",", "", GE2019_Conservatives$electorate, fixed = TRUE))
+GE2019_Conservatives$valid_votes <- 
+  as.numeric(sub(",", "", GE2019_Conservatives$valid_votes, fixed = TRUE))
+GE2019_Conservatives$con <- 
+  GE2019_Conservatives$con / GE2019_Conservatives$valid_votes
+GE2015_Conservatives_Einflussgroessen <- 
+  join(GE2015_Conservatives, population_by_age_2015, by = "Constituency.ID")
+GE2015_Conservatives_Einflussgroessen <- 
+  join(GE2015_Conservatives_Einflussgroessen, GE2015_auslaenderq, 
+       by = "Constituency.ID")
+GE2015_Conservatives_Einflussgroessen <- 
+  join(GE2015_Conservatives_Einflussgroessen, density_2015, 
+       by = "Constituency.ID")
+GE2015_Conservatives_Einflussgroessen <- 
+  join(GE2015_Conservatives_Einflussgroessen, GE2015_economy, 
+       by = "Constituency.ID")
+GE2015_Conservatives_Einflussgroessen <- 
+  GE2015_Conservatives_Einflussgroessen[ , c(1:7, 9, 101, 111, 114, 115, 117:118, 130)]
+colnames(GE2015_Conservatives_Einflussgroessen) [
+  ncol(GE2015_Conservatives_Einflussgroessen)] <- "GDP per head"
+colnames(population_by_age_2017) [1] <- "Constituency.ID"
+colnames(density_2017) [3] <- "Constituency.ID"
+colnames(GE2017_Conservatives) [1] <- "Constituency.ID"
+colnames(GE2017_economy) [1] <- "Constituency.ID"
+GE2017_Conservatives_Einflussgroessen <- 
+  join(GE2017_Conservatives, population_by_age_2017, by = "Constituency.ID")
+GE2017_Conservatives_Einflussgroessen <- 
+  join(GE2017_Conservatives_Einflussgroessen, GE2017_auslaenderq, 
+       by = "Constituency.ID")
+GE2017_Conservatives_Einflussgroessen <- 
+  join(GE2017_Conservatives_Einflussgroessen, density_2017, 
+       by = "Constituency.ID")
+GE2017_Conservatives_Einflussgroessen <- 
+  join(GE2017_Conservatives_Einflussgroessen, GE2017_economy, 
+       by = "Constituency.ID")
+GE2017_Conservatives_Einflussgroessen <- 
+  GE2017_Conservatives_Einflussgroessen[ , c(1:7, 9, 101, 111, 114, 115, 117:118, 130)]
+colnames(GE2017_Conservatives_Einflussgroessen) [
+  ncol(GE2017_Conservatives_Einflussgroessen)] <- "GDP per head"
+colnames(population_by_age_2019) [1] <- "Constituency.ID"
+colnames(density_2019) [4] <- "Constituency.ID"
+colnames(GE2019_Conservatives) [1] <- "Constituency.ID"
+colnames(GE2019_economy) [1] <- "Constituency.ID"
+GE2019_Conservatives_Einflussgroessen <- 
+  join(GE2019_Conservatives, density_2019, by = "Constituency.ID")
+GE2019_Conservatives_Einflussgroessen <- 
+  join(GE2019_Conservatives_Einflussgroessen, population_by_age_2019, 
+       by = "Constituency.ID")
+GE2019_Conservatives_Einflussgroessen <- 
+  join(GE2019_Conservatives_Einflussgroessen, GE2019_auslaenderq, 
+       by = "Constituency.ID")
+GE2019_Conservatives_Einflussgroessen <- 
+  join(GE2019_Conservatives_Einflussgroessen, GE2019_economy, 
+       by = "Constituency.ID")
+GE2019_Conservatives_Einflussgroessen <- 
+  GE2019_Conservatives_Einflussgroessen[ , c(1:7, 13, 105, 115, 118, 119, 10, 11, 131)]
+colnames(GE2019_Conservatives_Einflussgroessen) [
+  ncol(GE2019_Conservatives_Einflussgroessen)] <- "GDP per head"
+total.model.2015.con <- 
+  lm(data = GE2015_Conservatives_Einflussgroessen, 
+     Con ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2015_Conservatives_Einflussgroessen$Con_ber <- total.model.2015.con$res
+total.model.2017.con <- 
+  lm(data = GE2017_Conservatives_Einflussgroessen, 
+     con ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2017_Conservatives_Einflussgroessen$con_ber <- total.model.2017.con$res
+total.model.2019.con <- 
+  lm(data = GE2019_Conservatives_Einflussgroessen,
+     con ~ avg_age + auslaenderq + density + `GDP per head`)
+GE2019_Conservatives_Einflussgroessen$con_ber <- total.model.2019.con$res
+Wahlstrom_2015_zu_2017_con <- 
+  join(GE2015_Conservatives_Einflussgroessen, 
+       GE2017_Conservatives_Einflussgroessen, by = "Constituency.ID")
+colnames(Wahlstrom_2015_zu_2017_con) [22] <- c("17_con")
+colnames(Wahlstrom_2015_zu_2017_con) [31] <- c("17_con_ber")
+Wahlstrom_2015_zu_2017_con$change_con <- 
+  Wahlstrom_2015_zu_2017_con$`17_con` - Wahlstrom_2015_zu_2017_con$Con
+Wahlstrom_2015_zu_2017_con <- 
+  join(Wahlstrom_2015_zu_2017_con, BREXIT_2016_Einflussgroessen, 
+       by = "Constituency.ID")
+Wahlstrom_2015_zu_2017_con <- Wahlstrom_2015_zu_2017_con[ , c(1:32, 34:37, 39, 46)]
+Wahlstrom_2017_zu_2019_con <- 
+  join(GE2017_Conservatives_Einflussgroessen, 
+       GE2019_Conservatives_Einflussgroessen, by = "Constituency.ID")
+colnames(Wahlstrom_2017_zu_2019_con) [22] <- c("19_con")
+colnames(Wahlstrom_2017_zu_2019_con) [31] <- c("19_con_ber")
+Wahlstrom_2017_zu_2019_con$change_con <- 
+  Wahlstrom_2017_zu_2019_con$`19_con` - Wahlstrom_2017_zu_2019_con$con
+Wahlstrom_2017_zu_2019_con <- 
+  join(Wahlstrom_2017_zu_2019_con, BREXIT_2016_Einflussgroessen, by = "Constituency.ID")
+Wahlstrom_2017_zu_2019_con <- 
+  Wahlstrom_2017_zu_2019_con[ , c(1:32, 34:37, 39, 46)]
+Wahlstrom_2017_zu_2019_con_2 <- Wahlstrom_2017_zu_2019_con
+Wahlstrom_2017_zu_2019_con[
+  Wahlstrom_2017_zu_2019_con$constituency_name == "Chorley", ]$change_con <- NA
+Wahlstrom_2017_zu_2019_con[
+  Wahlstrom_2017_zu_2019_con$constituency_name == "Buckingham", ]$change_con <- NA
+Wahlstrom_2015_zu_2019_con <- 
+  join(GE2015_Conservatives_Einflussgroessen, 
+       GE2019_Conservatives_Einflussgroessen, by = "Constituency.ID")
+colnames(Wahlstrom_2015_zu_2019_con) [22] <- c("19_con")
+colnames(Wahlstrom_2015_zu_2019_con) [31] <- c("19_con_ber")
+Wahlstrom_2015_zu_2019_con$change_con <- 
+  Wahlstrom_2015_zu_2019_con$`19_con` - Wahlstrom_2015_zu_2019_con$Con
+Wahlstrom_2015_zu_2019_con <- 
+  join(Wahlstrom_2015_zu_2019_con, BREXIT_2016_Einflussgroessen, by = "Constituency.ID")
+Wahlstrom_2015_zu_2019_con <- Wahlstrom_2015_zu_2019_con[ , c(1:32, 34:37, 39, 46)]
+Wahlstrom_2015_zu_2019_con[
+  Wahlstrom_2015_zu_2019_con$constituency_name == "Chorley", ]$change_con <- NA
+Wahlstrom_2015_zu_2019_con[
+  Wahlstrom_2015_zu_2019_con$constituency_name == "Buckingham", ]$change_con <- NA
+```
+
+```{r Conservatives Einfluss, Grafiken und Karten, include=FALSE, warning=FALSE}
+#Erstelle lineares Regressionsmodell der Stimmenanteiländerung der Conservativespartei in 
+#Abhängigkeit von Referendumsergebnissen der Schätzung und zeige Wahlströme 
+#zwischen den Jahren.
+Modell.Wahlstrom.2015.2017.con <- 
+  lm(data = Wahlstrom_2015_zu_2017_con, change_con ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2017.con)
+Wahlstrom_2015_zu_2017_con$country_help <- 
+  ifelse(Wahlstrom_2015_zu_2017_con$Country == "Scotland", "Schottland", 
+         "Rest UK")
+Wahlstrom_2015_zu_2017_con$country_help <- 
+  as.factor(Wahlstrom_2015_zu_2017_con$country_help)
+Wahlstrom_2015_zu_2017_con$country_help <- 
+  factor(Wahlstrom_2015_zu_2017_con$country_help, 
+         levels = rev(levels(Wahlstrom_2015_zu_2017_con$country_help)))
+ggplot(data = Wahlstrom_2015_zu_2017_con, 
+       aes(x = Figure.to.use, y = change_con)) +
+  geom_point() +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  labs(y = "Stimmenanteilsänderung Conservatives", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Conservatives von 2015 bis 2017") +
+  theme(legend.text = element_text(size = 15))
+# ggplot(data = Wahlstrom_2015_zu_2017_con, 
+#        aes(x = Figure.to.use, y = change_con)) +
+#   geom_point(aes(color = as.factor(country_help))) +
+#   scale_color_manual(values = c("red", "black")) +
+#   coord_cartesian(ylim = c(-0.3, 0.4)) +
+#   theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+#         legend.text = element_text(size = 15)) +
+#   labs(y = "Stimmenanteilsänderung Conservatives", 
+#        x = "Geschätzter Leave-Stimmenanteil", 
+#        title = "Entwicklung Stimmenanteil Conservatives von 2015 bis 2017")
+Modell.Wahlstrom.2017.2019.con <- 
+  lm(data = Wahlstrom_2017_zu_2019_con, change_con ~ Figure.to.use)
+summary(Modell.Wahlstrom.2017.2019.con)
+Wahlstrom_2017_zu_2019_con$country_help <- 
+  ifelse(Wahlstrom_2017_zu_2019_con$country_name == "Scotland", "Schottland", 
+         "Rest UK")
+Wahlstrom_2017_zu_2019_con$country_help <- 
+  as.factor(Wahlstrom_2017_zu_2019_con$country_help)
+Wahlstrom_2017_zu_2019_con$country_help <- 
+  factor(Wahlstrom_2017_zu_2019_con$country_help, 
+         levels = rev(levels(Wahlstrom_2017_zu_2019_con$country_help)))
+ggplot(data = Wahlstrom_2017_zu_2019_con_2, 
+       aes(x = Figure.to.use, y = change_con)) +
+  geom_point() +
+  labs(y = "Stimmenanteilsänderung Conservatives", 
+       x = "Geschätzter Leave-Stimmenanteil", 
+       title = "Entwicklung Stimmenanteil Conservatives von 2017 bis 2019") +
+  theme(legend.text = element_text(size = 15))
+# ggplot(data = Wahlstrom_2017_zu_2019_con, 
+#        aes(x = Figure.to.use, y = change_con)) +
+#   geom_point() +
+#   coord_cartesian(ylim = c(-0.3, 0.4)) +
+#   labs(y = "Stimmenanteilsänderung Conservatives", 
+#        x = "Geschätzter Leave-Stimmenanteil", 
+#        title = "Entwicklung Stimmenanteil Conservatives von 2017 bis 2019") +
+#   theme(legend.text = element_text(size = 15))
+# ggplot(data = Wahlstrom_2017_zu_2019_con, 
+#        aes(x = Figure.to.use, y = change_con)) +
+#   geom_point(aes(color = as.factor(country_help))) +
+#   scale_color_manual(values = c("red", "black")) +
+#   coord_cartesian(ylim = c(-0.3, 0.4)) +
+#   theme(legend.position = c(0.1, 0.94), legend.title = element_blank(), 
+#         legend.text = element_text(size = 15)) +
+#   labs(y = "Stimmenanteilsänderung Conservatives", 
+#        x = "Geschätzter Leave-Stimmenanteil", 
+#        title = "Entwicklung Stimmenanteil Conservatives von 2017 bis 2019")
+Modell.Wahlstrom.2015.2019.con <- 
+  lm(data = Wahlstrom_2015_zu_2019_con, change_con ~ Figure.to.use)
+summary(Modell.Wahlstrom.2015.2019.con)
+Wahlstrom_2015_zu_2019_con$country_help <- 
+  ifelse(Wahlstrom_2015_zu_2019_con$Country == "Scotland", "Schottland", 
+         "Rest UK")
+Wahlstrom_2015_zu_2019_con$country_help <- 
+  as.factor(Wahlstrom_2015_zu_2019_con$country_help)
+Wahlstrom_2015_zu_2019_con$country_help <- 
+  factor(Wahlstrom_2015_zu_2019_con$country_help, 
+         levels = rev(levels(Wahlstrom_2015_zu_2019_con$country_help)))
+plot_conservatives1519 <- ggplot(data = Wahlstrom_2015_zu_2019_con,
+       aes(x = Figure.to.use, y = change_con)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 1) +
+  geom_point() +
+  coord_cartesian(ylim = c(-0.3, 0.4)) +
+  labs(y = "Stimmenanteilsänderung Conservatives",
+       x = "Geschätzter Leave-Stimmenanteil",
+       #Kurzer, umgebrochener Titel, damit er im schmalen Panel eines
+       #2er-grid.arrange nicht rechts abgeschnitten wird.
+       title = "Conservatives vs.\nLeave-Anteil (2015-2019)") +
+  theme(legend.text = element_text(size = 15), 
+        plot.title = element_text(size = 11))
+# ggplot(data = Wahlstrom_2015_zu_2019_con,
+#        aes(x = Figure.to.use, y = change_con)) +
+#   geom_hline(yintercept = 0, linetype = "dashed", color = "green", size = 2) +
+#   geom_point(aes(color = as.factor(country_help))) +
+#   scale_color_manual(values = c("red", "black")) +
+#   coord_cartesian(ylim = c(-0.3, 0.4)) +
+#   theme(legend.position = c(0.125, 0.94), legend.title = element_blank(),
+#         legend.text = element_text(size = 15)) +
+#   labs(y = "Stimmenanteilsänderung Conservatives",
+#        x = "Geschätzter Leave-Stimmenanteil",
+#        title = "Entwicklung Stimmenanteil Conservatives in Zusammenhang \nmit Leave-Stimmenanteil (2015-2019)")
+Wahlstrom_2015_zu_2017_con_map <- Wahlstrom_2015_zu_2017_con
+colnames(Wahlstrom_2015_zu_2017_con_map) [2] <- "id"
+Wahlstrom_2015_zu_2017_con_map$id <- 
+  gsub(", ", " ", Wahlstrom_2015_zu_2017_con_map$id)
+Wahlstrom_2015_zu_2017_con_map$id <- 
+  sub("North (.*)", "\\1 North", Wahlstrom_2015_zu_2017_con_map$id)
+Wahlstrom_2015_zu_2017_con_map$id <- 
+  sub("South (.*)", "\\1 South", Wahlstrom_2015_zu_2017_con_map$id)
+Wahlstrom_2015_zu_2017_con_map$id <- 
+  sub("East (.*)", "\\1 East", Wahlstrom_2015_zu_2017_con_map$id)
+Wahlstrom_2015_zu_2017_con_map$id <- 
+  sub("West (.*)", "\\1 West", Wahlstrom_2015_zu_2017_con_map$id)
+Wahlstrom_2015_zu_2017_con_map$id <- 
+  sub("Mid (.*)", "\\1 Mid", Wahlstrom_2015_zu_2017_con_map$id)
+Wahlstrom_2015_zu_2017_con_map$id <- 
+  sub("Central (.*)", "\\1 Central", Wahlstrom_2015_zu_2017_con_map$id)
+Wahlstrom_2015_zu_2017_con_map$id <- 
+  sub("^(.*) City Of", "City Of \\1", Wahlstrom_2015_zu_2017_con_map$id)
+df_help <- join(mapdata_2015_zu_2017, Wahlstrom_2015_zu_2017_con_map, by = "id")
+ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = Figure.to.use), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358)) +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank())
+ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_con), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358)) +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank())
+Wahlstrom_2017_zu_2019_con_map <- Wahlstrom_2017_zu_2019_con
+colnames(Wahlstrom_2017_zu_2019_con_map) [2] <- "id"
+df_help <- 
+  join(mapdata_2017_zu_2019, Wahlstrom_2017_zu_2019_con_map, by = "id")
+ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_con), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Veränderung Stimmenanteil", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358)) +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank())
+Wahlstrom_2015_zu_2019_con_map <- Wahlstrom_2015_zu_2019_con
+colnames(Wahlstrom_2015_zu_2019_con_map) [2] <- "id"
+Wahlstrom_2015_zu_2019_con_map$id <- 
+  gsub(", ", " ", Wahlstrom_2015_zu_2019_con_map$id)
+Wahlstrom_2015_zu_2019_con_map$id <- 
+  sub("North (.*)", "\\1 North", Wahlstrom_2015_zu_2019_con_map$id)
+Wahlstrom_2015_zu_2019_con_map$id <- 
+  sub("South (.*)", "\\1 South", Wahlstrom_2015_zu_2019_con_map$id)
+Wahlstrom_2015_zu_2019_con_map$id <- 
+  sub("East (.*)", "\\1 East", Wahlstrom_2015_zu_2019_con_map$id)
+Wahlstrom_2015_zu_2019_con_map$id <- 
+  sub("West (.*)", "\\1 West", Wahlstrom_2015_zu_2019_con_map$id)
+Wahlstrom_2015_zu_2019_con_map$id <- 
+  sub("Mid (.*)", "\\1 Mid", Wahlstrom_2015_zu_2019_con_map$id)
+Wahlstrom_2015_zu_2019_con_map$id <- 
+  sub("Central (.*)", "\\1 Central", Wahlstrom_2015_zu_2019_con_map$id)
+Wahlstrom_2015_zu_2019_con_map$id <- 
+  sub("^(.*) City Of", "City Of \\1", Wahlstrom_2015_zu_2019_con_map$id)
+df_help <- join(mapdata_2015_zu_2019, Wahlstrom_2015_zu_2019_con_map, by = "id")
+map_conservatives1519 <- ggplot() + 
+  geom_polygon(data = df_help, 
+               aes(x = long, y = lat, group = group, fill = change_con), 
+               color = NA, size = 0) +
+  scale_fill_gradient2(name = "Änderung", low = "#3C1361", 
+                       mid = "#EBEDEB", high = "#033500", midpoint = 0, 
+                       limits = c(-0.271, 0.358), na.value = "#EBEDEB") +
+  coord_fixed(1) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(), axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +
+  theme(axis.title.y=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank()) +
+  #rechtes Panel in einem 2er-grid.arrange: Legende in die leere Fläche
+  #oben links im Panel setzen (Verankerung an oberer linker Ecke).
+  theme(legend.position = c(0.02, 0.72), legend.justification = c(0, 1), 
+        legend.text = element_text(size = 15))
+```
+
+```{r Conservatives Karte und plot 1519, echo=FALSE, warning=FALSE}
+grid.arrange(plot_conservatives1519, map_conservatives1519, nrow = 1, ncol = 2)
+```
+Pearson (Gesamtes UK): 0,7109
+Pearson (UK ohne Schottland): 0,8188
+Pearson (Schottland): 0,5175
+Die Entwicklung des Stimmenanteils Conservatives wird in Zusammenhang mit dem geschätzten Leave-Stimmenanteil im Zeitraum von 2015-2019 untersucht.
+In gesamten Großbritannien ist mit einem Bravais-Pearson-Korrelationskoeffizienten von 0,7109 eine starke positive Korrelation zu erkennen.
+
+Die Stimmenentwicklung der Labour-Partei und der Conservatives zeigt, dass im Zeitraum von 2015-2019 die Stimmen für die Labour abgenommen haben und für die Conservatives zugenommen.
+
+```{r relevante Korrelationen berechnen, echo=FALSE, include=FALSE}
+#relevanten Korrelationskoeffizienten
+cor(Wahlstrom_2015_zu_2017[
+  !(Wahlstrom_2015_zu_2017$Country == "Northern Ireland") & 
+    !(Wahlstrom_2015_zu_2017$Country == "Scotland"), 
+  ]$change_votes_3, Wahlstrom_2015_zu_2017[
+    !is.na(Wahlstrom_2015_zu_2017$Figure.to.use) & 
+      !(Wahlstrom_2015_zu_2017$Country == "Scotland"), 
+    ]$Figure.to.use,  method = "pearson")
+cor(Wahlstrom_2015_zu_2017[
+  Wahlstrom_2015_zu_2017$Country == "Scotland", 
+  ]$change_votes_3, Wahlstrom_2015_zu_2017[
+  Wahlstrom_2015_zu_2017$Country == "Scotland", 
+  ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2017_zu_2019[!(
+  Wahlstrom_2017_zu_2019$country_name == "Northern Ireland") & 
+    !is.na(Wahlstrom_2017_zu_2019$change_votes_1),
+  ]$change_votes_1, Wahlstrom_2017_zu_2019[
+    !is.na(Wahlstrom_2017_zu_2019$Figure.to.use) & 
+      !is.na(Wahlstrom_2017_zu_2019$change_votes_1), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2017_zu_2019[
+  !(Wahlstrom_2017_zu_2019$country_name == "Northern Ireland") & 
+    !is.na(Wahlstrom_2017_zu_2019$change_votes_2),
+  ]$change_votes_2, Wahlstrom_2017_zu_2019[
+    !is.na(Wahlstrom_2017_zu_2019$Figure.to.use) & 
+      !is.na(Wahlstrom_2017_zu_2019$change_votes_2), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2017_zu_2019[
+  !(Wahlstrom_2017_zu_2019$country_name == "Northern Ireland") & 
+    !is.na(Wahlstrom_2017_zu_2019$change_votes_3),
+  ]$change_votes_3, Wahlstrom_2017_zu_2019[
+    !is.na(Wahlstrom_2017_zu_2019$Figure.to.use) & 
+      !is.na(Wahlstrom_2017_zu_2019$change_votes_3), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2017_zu_2019[
+  !(Wahlstrom_2017_zu_2019$country_name == "Northern Ireland") & 
+    !is.na(Wahlstrom_2017_zu_2019$change_votes_3) &
+    !(Wahlstrom_2017_zu_2019$country_name == "Scotland"),
+  ]$change_votes_3, Wahlstrom_2017_zu_2019[
+    !is.na(Wahlstrom_2017_zu_2019$Figure.to.use) & 
+      !is.na(Wahlstrom_2017_zu_2019$change_votes_3) &
+      !(Wahlstrom_2017_zu_2019$country_name  == "Scotland"), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2017_zu_2019[
+  Wahlstrom_2017_zu_2019$country_name == "Scotland" & 
+    !is.na(Wahlstrom_2017_zu_2019$change_votes_3),
+  ]$change_votes_3, Wahlstrom_2017_zu_2019[
+    Wahlstrom_2017_zu_2019$country_name == "Scotland", 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019[
+  !(Wahlstrom_2015_zu_2019$Country == "Northern Ireland") & 
+    !is.na(Wahlstrom_2015_zu_2019$change_votes_1), 
+  ]$change_votes_1, Wahlstrom_2015_zu_2019[
+    !is.na(Wahlstrom_2015_zu_2019$Figure.to.use) & 
+      !is.na(Wahlstrom_2015_zu_2019$change_votes_1), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019[
+  !(Wahlstrom_2015_zu_2019$Country == "Northern Ireland") & 
+    !is.na(Wahlstrom_2015_zu_2019$change_votes_2), 
+  ]$change_votes_2, Wahlstrom_2015_zu_2019[
+    !is.na(Wahlstrom_2015_zu_2019$Figure.to.use) & 
+      !is.na(Wahlstrom_2015_zu_2019$change_votes_2), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019[
+  !(Wahlstrom_2015_zu_2019$Country == "Northern Ireland") & 
+    !is.na(Wahlstrom_2015_zu_2019$change_votes_3), 
+  ]$change_votes_3, Wahlstrom_2015_zu_2019[
+    !is.na(Wahlstrom_2015_zu_2019$Figure.to.use) & 
+      !is.na(Wahlstrom_2015_zu_2019$change_votes_3), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019[
+  !(Wahlstrom_2015_zu_2019$Country == "Northern Ireland") & 
+    !is.na(Wahlstrom_2015_zu_2019$change_votes_3) &
+    !(Wahlstrom_2015_zu_2019$country_name == "Scotland"),
+  ]$change_votes_3, Wahlstrom_2015_zu_2019[
+    !is.na(Wahlstrom_2015_zu_2019$Figure.to.use) &
+      !is.na(Wahlstrom_2015_zu_2019$change_votes_3) &
+      !(Wahlstrom_2015_zu_2019$Country  == "Scotland"), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019[
+  Wahlstrom_2015_zu_2019$Country == "Scotland" & 
+    !is.na(Wahlstrom_2015_zu_2019$change_votes_3),
+  ]$change_votes_3, Wahlstrom_2015_zu_2019[
+    Wahlstrom_2015_zu_2019$Country == "Scotland", 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019_lab[
+  !(Wahlstrom_2015_zu_2019_lab$Country == "Northern Ireland") & 
+    !is.na(Wahlstrom_2015_zu_2019_lab$change_lab), 
+  ]$change_lab, Wahlstrom_2015_zu_2019_lab[
+    !is.na(Wahlstrom_2015_zu_2019_lab$Figure.to.use) &
+      !is.na(Wahlstrom_2015_zu_2019_lab$change_lab), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2017_con[
+  !(Wahlstrom_2015_zu_2017_con$Country == "Northern Ireland") & 
+    !is.na(Wahlstrom_2015_zu_2017_con$change_con),
+  ]$change_con, Wahlstrom_2015_zu_2017_con[
+    !is.na(Wahlstrom_2015_zu_2017_con$Figure.to.use) & 
+      !is.na(Wahlstrom_2015_zu_2017_con$change_con), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2017_zu_2019_con[
+  !(Wahlstrom_2017_zu_2019_con$country_name == "Northern Ireland") & 
+    !is.na(Wahlstrom_2017_zu_2019_con$change_con),
+  ]$change_con, Wahlstrom_2017_zu_2019_con[
+    !is.na(Wahlstrom_2017_zu_2019_con$Figure.to.use) & 
+      !is.na(Wahlstrom_2017_zu_2019_con$change_con), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019_con[
+  !(Wahlstrom_2015_zu_2019_con$Country == "Northern Ireland") & 
+    !is.na(Wahlstrom_2015_zu_2019_con$change_con), 
+  ]$change_con, Wahlstrom_2015_zu_2019_con[
+    !is.na(Wahlstrom_2015_zu_2019_con$Figure.to.use) & 
+      !is.na(Wahlstrom_2015_zu_2019_con$change_con), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019_con[
+  !(Wahlstrom_2015_zu_2019_con$Country == "Northern Ireland") & 
+    !is.na(Wahlstrom_2015_zu_2019_con$change_con) &
+    !(Wahlstrom_2015_zu_2019_con$country_name == "Scotland"),
+  ]$change_con, Wahlstrom_2015_zu_2019_con[
+    !is.na(Wahlstrom_2015_zu_2019_con$Figure.to.use) & 
+      !is.na(Wahlstrom_2015_zu_2019_con$change_con) &
+      !(Wahlstrom_2015_zu_2019_con$Country  == "Scotland"), 
+    ]$Figure.to.use, method = "pearson")
+cor(Wahlstrom_2015_zu_2019_con[
+  Wahlstrom_2015_zu_2019_con$Country == "Scotland" & 
+    !is.na(Wahlstrom_2015_zu_2019_con$change_con),
+  ]$change_con, Wahlstrom_2015_zu_2019_con[
+    Wahlstrom_2015_zu_2019_con$Country == "Scotland", 
+    ]$Figure.to.use, method = "pearson")
+```
+
+
+## 5. Zusammenfassung
+
+35
+Fazit: Alterseinfluss
+In den Wahlkreisen mit hohem Durchschnittsalter besteht ein
+Positiver Zusammenhang mit der Leave-Abstimmung im  Referendum
+Positiver Zusammenhang mit einem Sieg der Hard-Brexit-Parteien
+In den Wahlkreisen mit niedrigem Durchschnittsalter besteht ein
+Positiver Zusammenhang mit einer Remain-Abstimmung im Referendum
+Positiver Zusammenhang mit dem Sieg einer Soft-Brexit-Partei
+Es existiert kein Zusammenhang zwischen dem Stimmenanteil der No-Brexit-Parteien und dem Durchschnittsalter.
+
+Fazit: Einfluss EU-Referendum
+In den Wahlkreisen, in denen mehrheitlich für den EU-Austritt gestimmt wurde, existiert ein 
+positiver Zusammenhang mit dem Sieg einer Hard-Brexit-Partei,
+Negativer Zusammenhang mit dem Sieg einer Soft-Brexit-Partei.
+In den Wahlkreisen, in denen mehrheitlich gegen den EU-Austritt gestimmt wurde, existiert ein
+Negativer Zusammenhang mit dem Sieg einer Hard-Brexit-Partei
+Positiver Zusammenhang mit dem Sieg einer Soft-Brexit-Partei.
+Es existiert kein Zusammenhang zwischen dem Stimmenanteil der No-Brexit-Parteien und dem Stimmenanteil für den EU-Austritt.
+
+Zusammenfassung: 
+Im Sommer 2016 hat das Vereinigte Königreich im Rahmen eines konsultativen Referendums über dessen Austritt aus der EU abgestimmt. Im Rahmen der Hausarbeit wurde der Zusammenhang der Wahlergebnisse des Referendums einerseits mit der Altersstruktur der Wahlbezirke, andererseits auch mit den Wahlergebnissen der Parlamentswahlen 2015, 2017 und 2019 analysiert.
+Die UK hat beim EU-Referendum mit einem Wahlstimmenanteil von 51.9% für das Verlassen der EU gestimmt. Während in Nordirland und Schottland überwiegend für den Verbleib in der EU gestimmt wurde, haben die Bürger in England und Wales überwiegend für das Verlassen der EU gestimmt. Zu erwähnen bleibt, dass sich von den insgesamt 64.1 Mio Einwohnern des Vereinigten Königreichs 53 Mio Menschen in England niedergelassen haben und somit die Einwohnerzahl Englands die der restlichen Regionen dominiert.
+Stellt man den Stimmenanteil des Wahlergebnisses der einzelnen Bezirke dem jeweilig zugehörigem Durchschnittsalter gegenüber, so erkennt man eine positive Korrelation der zwei Größen.
+Für die Parlamentswahlen haben wir die einzelnen Parteien nach ihrer politischen Ausrichtung im Bezug zum EU-Referendum in drei Gruppen eingeteilt: No-Brexit-Parteien (SNP, LibDems, Plaid Cymru, SF, SDLP, Alliance), Soft-Brexit-Parteien (Labour, DUP, UUP) und Hard-Brexit-Parteien (Conservatives, UKIP/Brexit).
+Stellt man den Stimmenanteil der Parlamentswahlergebnisse (eingeteilt nach Ihren Gruppen) dem Durchschnittsalter der einzelnen Wahlbezirke gegenüber, erkennt man eine nahezu identische Verteilung über die einzelnen Jahre. Zwischen dem Stimmenanteil der Hard-Brexit-Parteien und dem Durchschnittsalter lässt sich eine positive Korrelation beobachten, zwischen dem Stimmenanteil der Soft-Brexit-Parteien und dem Durchschnittsalter eine negative Korrelation und zwischen den No-Brexit-Parteien und dem Durchschnittsalter keine Korrelation beobachten.
+Im letzten Abschnitt der Hausarbeit habe ich mich mit den Stimmenanteilsveränderungen der verschieden positionierten Parteien zwischen den einzelnen Parlamentswahlen beschäftigt. Dabei kann man die Schlüsse ziehen, dass eine Korrelation zwischen dem Zuspruch für den Austritt aus der EU und der Stimmenanteilsänderung der Parteiengruppen in den einzelnen Wahlbezirken besteht. Es herrscht eine positive Korrelation zwischen der Stimmenanteilversänderung der Gruppe der Hard-Brexit-Parteien und der Zustimmung für den EU-Austritt beim Referendum 2016 in den einzelnen Wahlbezirken. Für die Gruppe der Soft-Brexit-Parteien wurde bei der Betrachtung dieser beiden Parameter eine ähnlich große negative Korrelation beobachtet. Etwa äquivalent gestalteten sich die Korrelation für die beiden größten Parteien in diesen Gruppen: die Conservatives als Hard-Brexit-Partei und Labour als Soft-Brexit-Partei. Bei der Gruppe der No-Brexit-Parteien konnte keine bedeutende Korrelation festgestellt werden.
+
+## 6. Literaturverzeichnis
+
+
+
+BERTELSMANN STIFTUNG (2015): Brexit-Mögliche wirtschaftliche Folgen eines britischen EU-Austritts., in Bertelsmann Stiftung Policy Brief #2015/05, ISSIN 2191-2459.
+https://docplayer.org/54056-Brexit-moegliche-wirtschaftliche-britischen-eu-austritts.html, Abrufdatum 15.09.2021.
+
+BUNDESZENTRALE FÜR POLITISCHE BILDUNG (2012): MW 02.11 Beispiel für die Mehrheitswahl: Großbritannien.
+https://www.bpb.de/lernen/grafstat/grafstat-bundestagswahl-2013/145570/mw-02-11-beispiel-fuer-die-mehrheitswahl-grossbritannien, 05.10.2012, Abrufdatum 15.09.2021.
+
+BBC (2016): EU referendum: The results in maps and charts.
+https://www.bbc.com/news/uk-politics-36616028, 08.06.2016, Abrufdatum 15.09.2021.
+
+BECKER, S./ FETZER, T./ NOVY, D. (2017): Who Voted for Brexit?, in: ifo DICE Report, ISSN 2511-7823, ifo Institut -Leibniz-Institut für Wirtschaftsforschung an der Universität München, München, Vol. 15, Iss. 4, pp.3-5.
+
+DATA TRICKS (2017): England and Wales heat map in R.
+https://datatricks.co.uk/creating-maps-in-r, 12.09.2017, Abrufdatum 15.09.2021.
+
+DATA TRICKS (2018): UK population density map in R.
+https://datatricks.co.uk/uk-population-density-map-in-r, 26.07.2018, Abrufdatum 15.09.2021.
+
+DATA TRICKS (2019): Creating maps in R(2019).
+https://datatricks.co.uk/creating-maps-in-r-2019, 02.02.2019, Abrufdatum 15.09.2021.
+
+DUNFORD, D./ STEPHENSON, W./ DE LA TORRE ARENAS, I./ DALE, B./ JEAVANS, C./ DAHLGREEN, W./ AHMED, M./ LOWTHER, E./ RAHMAN, S./ WALTON, J. (2019): Election results 2019: Analysis in maps and charts.
+https://www.bbc.com/news/election-2019-50770798, 13.12.2019, Abrufdatum 15.09.2021.
+
+KAHLE, D./ WICKHAM, H. (2013): ggmap: Spatial Visualization with ggplot2., in: The R Journal ISSN 2073-4859, Vol. 5/1, pp:144-161.
+
+KIM, T. (2018): Spatial Visualisations with R.
+https://www.londonr.org/wp-content/uploads/sites/2/2018/05/LondonR_SpatialViz.pdf, 08.05.2021, Abrufdatum 15.09.2021.
+
+LOVELACE, R./ NOWOSAD, J./ MUENCHOW, J. (2021): Geocomputation with R: 8 Making maps with R.
+https://geocompr.robinlovelace.net/adv-map.html, 14.09.2021, Abrufdatum 15.09.2021.
+
+MEDIUM (2016): Revised estimates of leave vote in Westminster constituencies.
+https://docs.google.com/spreadsheets/d/1wTK5dV2_YjCMsUYlwg0l48uWWf44sKgG8uFVMv5OWlA/edit#gid=893960794, Abrufdatum 15.09.2021.
+
+MORENO, M./ MATHIEU, B. (2018): Drawing beautiful maps programmatically with R, sf and ggplot2 - Part 1: Basics. 
+https://r-spatial.org/r/2018/10/25/ggplot2-sf.html, 25.10.2018, Abrufdatum 15.09.2021.
+
+OFFICE FOR NATIONAL STATISTICS (2016): Standard Area Measurements (2016) for Administrative Areas of the United Kingdom.
+https://geoportal.statistics.gov.uk/datasets/a79de233ad254a6d9f76298e666abb2b/about, 01.02.2017, Abrufdatum 15.09.2021.
+
+OFFICE FOR NATIONAL STATISTICS (2019): Population estimates for the UK, England and Wales, Scotland and Northern Ireland: mid-2019.
+https://www.ons.gov.uk/peoplepopulationandcommunity/populationandmigration/populationestimates/bulletins/annualmidyearpopulationestimates/mid2019estimates, 24.06.2020, Abrufdatum 15.09.2021.
+
+OFFICE FOR NATIONAL STATISTICS (2020): GDP, UK regions and countries: January to March 2020.
+https://www.ons.gov.uk/economy/grossdomesticproductgdp/bulletins/gdpukregionsandcountries/januarytomarch2020, 09.11.2020, Abrufdatum 15.09.2021.
+
+RALLINGS, C./ TRASHER, M. (2015): The 2015 General Election: aspects of participation and administration., in: THE ELECTORAL COMMISION,
+https://www.electoralcommission.org.uk/sites/default/files/pdf_file/Plymouth-UKPGE-electoral-data-report-final-WEB.pdf, August 2015, Abrufdatum 15.09.2021.
+
+RYAN, Y. (2021): A short guide to historical newspaper data using R. 7 Mapping with R: Geocode and Map the British Library’s Newspaper Collection.
+https://bookdown.org/yann_ryan/r-for-newspaper-data/mapping-with-r-geocode-and-map-the-british-librarys-newspaper-collection.html, 20.07.2021, Abrufdatum 15.09.2021.
+
+STROCHAK, S. (2018): How to Create State and County Maps Easily in R. https://urban-institute.medium.com/how-to-create-state-and-county-maps-easily-in-r-577d29300bb2, 10.07.2018, Abrufdatum 15.09.2021.
+
+
+THE ELECTORAL COMMISION (2016): Results and turnout at the referendum.
+https://www.electoralcommission.org.uk/who-we-are-and-what-we-do/elections-and-referendums/past-elections-and-referendums/eu-referendum/results-and-turnout-eu-referendum, 25.09.2019, Abrufdatum 15.09.2021.
+
+UK PARLIAMENT (2015): General Election 2015: results.
+https://www.parliament.uk/business/publications/research/key-issues-parliament-2015/parliament-politics/general-election-2015-results/, Abrufdatum 15.09.2021
+
+UK PARLIAMENT (2015): General Election 2015.
+https://commonslibrary.parliament.uk/research-briefings/cbp-7186/, 28.07.2015, Abrufdatum 15.09.2021.
+
+UK PARLIAMENT (2017): Brexit: votes by constituency.
+https://commonslibrary.parliament.uk/brexit-votes-by-constituency/, 06.02.2017, Abrufdatum 15.09.2021.
+
+UK PARLIAMENT (2017): General Election 2017: full results and analysis.
+https://commonslibrary.parliament.uk/research-briefings/cbp-7979/, 29.01.2019, Abrufdatum 15.09.2021.
+
+UK PARLIAMENT (2019): General Election 2019: full results and analysis.
+https://commonslibrary.parliament.uk/research-briefings/cbp-8749/, 28.01.2020, Abrufdatum 15.09.2021.
+
+UK PARLIAMENT (2020): Constituency data: population, by age.
+https://commonslibrary.parliament.uk/constituency-statistics-population-by-age/, 10.09.2020, Abrufdatum 15.09.2021.
+
+UNIVERSITY OF OXFORD (2017): Mapping the Brexit vote.
+https://www.ox.ac.uk/news-and-events/oxford-and-brexit/brexit-analysis/mapping-brexit-vote, 07.03.2017, Abrufdatum 15.09.2021.
+
+WALKER, R.W. (2019): Data Visualisation Errors and a Task.
+https://rpubs.com/rwalkerWU/EconomistVisuals, 23.09.2019, Abrufdatum 15.09.2021.
+
